@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: claimsman-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${CLAIMSMAN_POSTGRES_DB:-claimsman}
+      POSTGRES_USER: ${CLAIMSMAN_POSTGRES_USER:-claimsman}
+      POSTGRES_PASSWORD: ${CLAIMSMAN_POSTGRES_PASSWORD:-claimsman}
+    ports:
+      - "${CLAIMSMAN_POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - claimsman_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${CLAIMSMAN_POSTGRES_USER:-claimsman}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  claimsman_pgdata:
+    name: claimsman_pgdata

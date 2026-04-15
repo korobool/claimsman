@@ -1,0 +1,2 @@
+# Placeholder so FastAPI's static mount path exists before the first frontend build.
+# The real contents are produced by `npm --prefix apps/frontend run build`.

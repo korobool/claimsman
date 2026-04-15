@@ -14,8 +14,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -168,3 +168,24 @@ Desktop.ini
 # Logs
 logs/
 *.log
+
+# Task folder — contains sensitive brief; only SPEC.md is publishable
+task/*
+!task/SPEC.md
+
+# Node
+node_modules/
+apps/frontend/dist/
+apps/frontend/tsconfig.tsbuildinfo
+
+# Built React SPA output (FastAPI mounts this dir; rebuild at deploy time)
+apps/web/static/app/*
+!apps/web/static/app/.gitkeep
+
+# Local env files
+.env
+!deploy/.env.example
+
+# Claimsman runtime state
+/var/lib/claimsman/
+/tmp/claimsman*.log
