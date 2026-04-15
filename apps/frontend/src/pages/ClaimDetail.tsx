@@ -14,6 +14,26 @@ import {
 } from "../lib/api";
 
 type ViewerTool = "select" | "add_bbox" | "edit_text";
+type ClaimStep = "intake" | "recognition" | "analysis" | "review";
+
+const STEP_ORDER: ClaimStep[] = ["intake", "recognition", "analysis", "review"];
+const STEP_LABELS: Record<ClaimStep, string> = {
+  intake: "Intake",
+  recognition: "Recognition",
+  analysis: "Analysis",
+  review: "Review",
+};
+
+function defaultStepForPipeline(
+  pipeline: ClaimDetail["pipeline"] | undefined,
+): ClaimStep {
+  if (!pipeline) return "intake";
+  const s = pipeline.stage;
+  if (s === "ready" || s === "decided" || s === "escalated") return "review";
+  if (s === "analyze" || s === "decide") return "analysis";
+  if (s === "ingest") return "intake";
+  return "recognition";
+}
 
 export default function ClaimDetailPage() {
   const { claimId } = useParams<{ claimId: string }>();
@@ -23,6 +43,7 @@ export default function ClaimDetailPage() {
   const [showBoxes, setShowBoxes] = useState(true);
   const [hoveredLine, setHoveredLine] = useState<number | null>(null);
   const [tool, setTool] = useState<ViewerTool>("select");
+  const [step, setStep] = useState<ClaimStep | null>(null);
   const claimRef = useRef<ClaimDetail | null>(null);
   claimRef.current = claim;
 
@@ -56,6 +77,13 @@ export default function ClaimDetailPage() {
       }
     }
   }, [claim, selectedPageId]);
+
+  // Auto-advance the active step as the pipeline progresses, but only
+  // if the user hasn't explicitly picked a step yet.
+  useEffect(() => {
+    if (step || !claim) return;
+    setStep(defaultStepForPipeline(claim.pipeline));
+  }, [claim, step]);
 
   const selectedPage = useMemo<ClaimPage | null>(() => {
     if (!claim || !selectedPageId) return null;
@@ -112,6 +140,7 @@ export default function ClaimDetailPage() {
             </span>
           </p>
           {claim.pipeline?.active && <PipelineStageBar pipeline={claim.pipeline} />}
+          <StepNavigator current={step ?? "intake"} pipeline={claim.pipeline} onChange={setStep} />
         </div>
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1 rounded-md border border-line p-0.5 text-[11px] font-medium">
@@ -183,7 +212,7 @@ export default function ClaimDetailPage() {
             <div key={doc.id} className="group border-b border-line/60 px-3 py-3">
               <div className="mb-2 flex items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-2">
-                  {doc.doc_stage !== "ready" && <Spinner size="xs" />}
+                  {doc.doc_stage === "ocr" && <Spinner size="xs" />}
                   <div className="truncate text-sm font-medium" title={doc.display_name ?? ""}>
                     {doc.display_name ?? "Untitled"}
                   </div>
@@ -241,21 +270,42 @@ export default function ClaimDetailPage() {
         </aside>
 
         <main className="flex min-w-0 flex-1">
-          <div className="flex min-w-0 flex-1 items-center justify-center overflow-auto bg-bg-base p-6">
-            {selectedPage ? (
-              <PageViewer
-                claimId={claim.id}
-                page={selectedPage}
-                showBoxes={showBoxes}
-                hoveredLine={hoveredLine}
-                onHoverLine={setHoveredLine}
-                tool={tool}
-                onBBoxAdded={load}
-                onLineEdited={load}
-              />
-            ) : (
-              <EmptyViewer />
+          <div className="flex min-w-0 flex-1 flex-col overflow-auto bg-bg-base">
+            {(claim.pipeline?.stage === "analyze" || claim.pipeline?.stage === "decide") && (
+              <div className="flex items-center gap-3 border-b border-accent/40 bg-accent/5 px-6 py-3">
+                <Spinner />
+                <div className="flex-1">
+                  <div className="text-sm font-medium text-ink">
+                    Claim data analysis and decision recommendations in progress
+                  </div>
+                  <div className="text-[11px] text-ink-dim">
+                    Gemma 4 is cross-referencing findings, extracted fields, and domain
+                    rules to propose an outcome.
+                  </div>
+                </div>
+              </div>
             )}
+            <div className="flex min-w-0 flex-1 items-center justify-center p-6">
+              {step === "intake" && <IntakeView claim={claim} onAdded={load} />}
+              {step === "recognition" && (
+                selectedPage ? (
+                  <PageViewer
+                    claimId={claim.id}
+                    page={selectedPage}
+                    showBoxes={showBoxes}
+                    hoveredLine={hoveredLine}
+                    onHoverLine={setHoveredLine}
+                    tool={tool}
+                    onBBoxAdded={load}
+                    onLineEdited={load}
+                  />
+                ) : (
+                  <EmptyViewer />
+                )
+              )}
+              {step === "analysis" && <AnalysisView claim={claim} />}
+              {step === "review" && <ReviewView claim={claim} onChanged={load} />}
+            </div>
           </div>
           <aside className="w-96 shrink-0 overflow-auto border-l border-line bg-bg-raised p-5">
             <div className="mb-4">
@@ -1149,6 +1199,221 @@ function confidenceDot(confidence: number): string {
   if (confidence >= 0.93) return "bg-severity-ok";
   if (confidence >= 0.8) return "bg-severity-warn";
   return "bg-severity-error";
+}
+
+function StepNavigator({
+  current,
+  pipeline,
+  onChange,
+}: {
+  current: ClaimStep;
+  pipeline?: ClaimDetail["pipeline"];
+  onChange: (s: ClaimStep) => void;
+}) {
+  // A step is "done" when the pipeline has moved past it.
+  const stage = pipeline?.stage;
+  const statusOf = (step: ClaimStep): "done" | "active" | "pending" => {
+    const map: Record<ClaimStep, string[]> = {
+      intake: ["ingest"],
+      recognition: ["ocr", "classify", "extract"],
+      analysis: ["analyze", "decide"],
+      review: ["ready", "decided", "escalated"],
+    };
+    if (step === current) return "active";
+    // done if the pipeline has moved past this step
+    const stepIdx = STEP_ORDER.indexOf(step);
+    const currentIdx = STEP_ORDER.indexOf(current);
+    if (stepIdx < currentIdx) return "done";
+    if (stage && map[step].includes(stage)) return "active";
+    return "pending";
+  };
+  return (
+    <div className="mt-4 flex items-center gap-0 text-[11px]">
+      {STEP_ORDER.map((s, i) => {
+        const status = statusOf(s);
+        const isLast = i === STEP_ORDER.length - 1;
+        const dotClass =
+          status === "done"
+            ? "bg-severity-ok text-[#0b0d10]"
+            : status === "active"
+              ? "bg-accent text-[#0b0d10]"
+              : "bg-bg-hover text-ink-faint";
+        const labelClass =
+          status === "pending" ? "text-ink-faint" : "text-ink";
+        return (
+          <div key={s} className="flex items-center">
+            <button
+              type="button"
+              onClick={() => onChange(s)}
+              className="group flex items-center gap-2"
+              aria-current={status === "active" ? "step" : undefined}
+            >
+              <span
+                className={`flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-semibold ${dotClass}`}
+              >
+                {status === "done" ? "✓" : i + 1}
+              </span>
+              <span className={`font-medium ${labelClass}`}>{STEP_LABELS[s]}</span>
+            </button>
+            {!isLast && (
+              <span
+                className={`mx-3 h-px w-8 ${
+                  status === "done" ? "bg-severity-ok" : "bg-line"
+                }`}
+              />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function IntakeView({
+  claim,
+  onAdded,
+}: {
+  claim: ClaimDetail;
+  onAdded: () => void;
+}) {
+  return (
+    <div className="mx-auto w-full max-w-3xl">
+      <h2 className="text-lg font-semibold tracking-tight">Intake</h2>
+      <p className="mt-1 text-sm text-ink-dim">
+        Files in this claim bundle. You can add more documents and the
+        pipeline will re-run analysis incrementally.
+      </p>
+      <div className="mt-6 rounded-md border border-line bg-bg-raised">
+        <div className="border-b border-line/60 px-4 py-2 text-xs uppercase tracking-wide text-ink-faint">
+          Uploads ({claim.uploads.length})
+        </div>
+        <ul className="divide-y divide-line/60">
+          {claim.uploads.map((u) => (
+            <li key={u.id} className="flex items-center justify-between px-4 py-2 text-sm">
+              <span className="truncate">{u.filename}</span>
+              <span className="shrink-0 text-xs text-ink-faint">
+                {u.mime_type} · {formatBytes(u.size_bytes)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+      <div className="mt-6 flex items-center justify-between rounded-md border border-dashed border-line bg-bg-raised px-4 py-6 text-sm">
+        <div>
+          <div className="font-medium">Need to add more documents?</div>
+          <div className="text-xs text-ink-dim">
+            Appending files re-runs the pipeline on the full (old + new) evidence.
+          </div>
+        </div>
+        <AddDocsButton claimId={claim.id} onAdded={onAdded} />
+      </div>
+    </div>
+  );
+}
+
+function AnalysisView({ claim }: { claim: ClaimDetail }) {
+  const thinking =
+    claim.pipeline?.stage === "analyze" || claim.pipeline?.stage === "decide";
+  const allFields = claim.documents.flatMap((d) =>
+    d.extracted_fields.map((ef) => ({ doc: d, field: ef })),
+  );
+  return (
+    <div className="mx-auto w-full max-w-5xl space-y-6">
+      <h2 className="text-lg font-semibold tracking-tight">Analysis</h2>
+      {thinking && (
+        <div className="flex items-start gap-3 rounded-md border border-accent/40 bg-accent/5 p-4">
+          <Spinner />
+          <div>
+            <div className="text-sm font-medium text-ink">
+              Claim data analysis and decision recommendations in progress
+            </div>
+            <div className="mt-1 text-xs text-ink-dim">
+              Gemma 4 is cross-referencing findings, extracted fields, and domain
+              rules to propose an outcome.
+            </div>
+          </div>
+        </div>
+      )}
+      {claim.findings && claim.findings.length > 0 ? (
+        <FindingsCard findings={claim.findings} summary={claim.findings_summary} />
+      ) : (
+        <div className="rounded-md border border-line bg-bg-raised p-4 text-sm text-ink-dim">
+          No findings have been generated yet.
+        </div>
+      )}
+      {claim.documents.map((doc) => (
+        doc.extracted_fields.length > 0 && (
+          <div key={doc.id}>
+            <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-wide text-ink-faint">
+              <span>{doc.display_name ?? doc.doc_type}</span>
+              <span>{doc.doc_type}</span>
+            </div>
+            <ExtractedFieldsCard fields={doc.extracted_fields} docType={doc.doc_type} />
+          </div>
+        )
+      ))}
+      {allFields.length === 0 && !thinking && (
+        <div className="rounded-md border border-line bg-bg-raised p-4 text-sm text-ink-dim">
+          No extracted fields yet.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReviewView({
+  claim,
+  onChanged,
+}: {
+  claim: ClaimDetail;
+  onChanged: () => void;
+}) {
+  if (!claim.proposed_decision && !claim.confirmed_decision) {
+    return (
+      <div className="mx-auto max-w-xl text-center text-sm text-ink-dim">
+        <h2 className="mb-2 text-lg font-semibold text-ink">Review</h2>
+        <p>
+          The pipeline has not produced a decision yet. Switch to Recognition
+          or Analysis to watch progress, or wait for the decision to appear here.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="mx-auto w-full max-w-4xl space-y-6">
+      <h2 className="text-lg font-semibold tracking-tight">Review</h2>
+      <div className="grid grid-cols-3 gap-3 text-sm">
+        <div className="rounded-md border border-line bg-bg-raised p-3">
+          <div className="text-xs uppercase text-ink-faint">Claimant</div>
+          <div className="mt-1 text-ink">{claim.claimant_name ?? "—"}</div>
+        </div>
+        <div className="rounded-md border border-line bg-bg-raised p-3">
+          <div className="text-xs uppercase text-ink-faint">Policy</div>
+          <div className="mt-1 text-ink">{claim.policy_number ?? "—"}</div>
+        </div>
+        <div className="rounded-md border border-line bg-bg-raised p-3">
+          <div className="text-xs uppercase text-ink-faint">Domain</div>
+          <div className="mt-1 text-ink">{claim.domain}</div>
+        </div>
+      </div>
+      <DecisionCard
+        claimId={claim.id}
+        status={claim.status}
+        proposed={claim.proposed_decision}
+        confirmed={claim.confirmed_decision}
+        onChanged={onChanged}
+      />
+      {claim.findings && claim.findings.length > 0 && (
+        <FindingsCard findings={claim.findings} summary={claim.findings_summary} />
+      )}
+      {claim.notes && (
+        <div className="rounded-md border border-line bg-bg-raised p-4 text-sm">
+          <div className="text-xs uppercase text-ink-faint">Reviewer notes</div>
+          <div className="mt-1 whitespace-pre-wrap text-ink">{claim.notes}</div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function AddDocsButton({
