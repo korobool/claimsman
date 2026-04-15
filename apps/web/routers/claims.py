@@ -395,7 +395,23 @@ async def recognize_region(
         raise HTTPException(status_code=500, detail=f"recognize failed: {exc}") from exc
 
     bbox_json = page.bbox_json if isinstance(page.bbox_json, dict) else {"lines": []}
-    lines = list(bbox_json.get("lines") or [])
+    existing_lines = list(bbox_json.get("lines") or [])
+
+    # Override behavior (ported from the reference prototype
+    # app/static/js/app.js processNewBbox + bboxOverlaps): any existing
+    # OCR line whose bbox overlaps the new user-drawn rectangle by more
+    # than 30% of the existing bbox's area is removed. The reviewer is
+    # saying "trust my rectangle, not Surya's detection" — so we wipe
+    # Surya's overlapping lines and append the freshly-recognized one.
+    kept_lines: list[dict] = []
+    removed_count = 0
+    for line in existing_lines:
+        lb = line.get("bbox") or []
+        if len(lb) == 4 and _bbox_overlaps(lb, payload.bbox, 0.30):
+            removed_count += 1
+            continue
+        kept_lines.append(line)
+
     if payload.polygon is None:
         x0, y0, x1, y1 = payload.bbox
         polygon = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
@@ -409,7 +425,9 @@ async def recognize_region(
         "manual": True,
         "auto_recognized": True,
     }
-    lines.append(new_line)
+    kept_lines.append(new_line)
+    kept_lines.sort(key=_line_sort_key)
+    lines = kept_lines
     bbox_json["lines"] = lines
     page.bbox_json = dict(bbox_json)
     page.ocr_text = "\n".join(line.get("text", "") for line in lines)
@@ -429,13 +447,43 @@ async def recognize_region(
         page_id=str(page_id),
         chars=len(text),
         confidence=round(confidence, 3),
+        overridden=removed_count,
     )
     return {
         "page_id": str(page.id),
-        "line_index": len(lines) - 1,
+        "line_count": len(lines),
+        "overridden": removed_count,
         "text": text,
         "confidence": confidence,
     }
+
+
+def _bbox_overlaps(a: list[float], b: list[float], threshold: float) -> bool:
+    """Return True if the intersection of a and b is more than
+    ``threshold`` of a's area.
+
+    Matches the reference project's bboxOverlaps(app.js) logic: compare
+    the intersection area to the existing line's area, not the new
+    one's — so a small existing line fully inside a big new box still
+    counts as 'overlap 100%' and gets removed."""
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    if ax1 >= bx2 or ax2 <= bx1 or ay1 >= by2 or ay2 <= by1:
+        return False
+    inter_w = min(ax2, bx2) - max(ax1, bx1)
+    inter_h = min(ay2, by2) - max(ay1, by1)
+    inter = inter_w * inter_h
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    if area_a <= 0:
+        return False
+    return inter > area_a * threshold
+
+
+def _line_sort_key(line: dict) -> tuple[float, float]:
+    b = line.get("bbox") or []
+    if len(b) == 4:
+        return (float(b[1]), float(b[0]))
+    return (0.0, 0.0)
 
 
 @router.post("/{claim_id}/pages/{page_id}/bboxes")
