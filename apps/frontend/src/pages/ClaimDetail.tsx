@@ -180,7 +180,7 @@ export default function ClaimDetailPage() {
             </div>
           )}
           {claim.documents.map((doc) => (
-            <div key={doc.id} className="border-b border-line/60 px-3 py-3">
+            <div key={doc.id} className="group border-b border-line/60 px-3 py-3">
               <div className="mb-2 flex items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-2">
                   {doc.doc_stage !== "ready" && <Spinner size="xs" />}
@@ -188,9 +188,26 @@ export default function ClaimDetailPage() {
                     {doc.display_name ?? "Untitled"}
                   </div>
                 </div>
-                <span className="shrink-0 rounded-full bg-bg-hover px-2 py-0.5 text-[10px] uppercase tracking-wide text-ink-faint">
-                  {doc.doc_stage === "ready" ? doc.doc_type : doc.doc_stage}
-                </span>
+                <div className="flex shrink-0 items-center gap-1">
+                  <button
+                    type="button"
+                    title="Re-run recognition (OCR + classify + extract + decide) across the full claim"
+                    onClick={async () => {
+                      try {
+                        await api.reprocessClaim(claim.id, "ocr");
+                        load();
+                      } catch (e: unknown) {
+                        setError(e instanceof Error ? e.message : String(e));
+                      }
+                    }}
+                    className="hidden rounded border border-line px-1.5 py-0.5 text-[10px] text-ink-dim hover:text-ink group-hover:block"
+                  >
+                    re-recognize
+                  </button>
+                  <span className="rounded-full bg-bg-hover px-2 py-0.5 text-[10px] uppercase tracking-wide text-ink-faint">
+                    {doc.doc_stage === "ready" ? doc.doc_type : doc.doc_stage}
+                  </span>
+                </div>
               </div>
               <ul className="space-y-1">
                 {doc.pages.map((page) => (

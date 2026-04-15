@@ -116,7 +116,93 @@ export default function Dev() {
                 <Stat label="pages" value={state.db.pages} />
                 <Stat label="fields" value={state.db.extracted_fields} />
               </div>
+              <div className="mt-3 grid grid-cols-4 gap-2 text-center">
+                <Stat label="in-flight" value={state.db.in_flight ?? 0} />
+                <Stat label="ready" value={state.db.ready_for_review ?? 0} />
+                <Stat label="errored" value={state.db.errored ?? 0} />
+                <Stat label="findings" value={state.db.findings ?? 0} />
+              </div>
             </Card>
+
+            {state.perf && (
+              <Card title="GPU / Device" span={2} tone={state.perf.cuda_available ? "accent" : undefined}>
+                <div className="flex items-center gap-2 text-sm">
+                  <span
+                    className={[
+                      "inline-block h-2 w-2 rounded-full",
+                      state.perf.cuda_available ? "bg-severity-ok" : "bg-severity-warn",
+                    ].join(" ")}
+                  />
+                  <span className="text-ink">
+                    {state.perf.cuda_available ? "CUDA" : "CPU"} · {state.perf.device_name ?? "?"}
+                  </span>
+                  <span className="ml-auto font-mono text-xs text-ink-faint">
+                    torch {state.perf.torch ?? "?"}
+                  </span>
+                </div>
+                {state.perf.gpus && state.perf.gpus.length > 0 && (
+                  <ul className="mt-3 space-y-2">
+                    {state.perf.gpus.map((g) => {
+                      const used_pct = (g.memory_used_mib / g.memory_total_mib) * 100;
+                      return (
+                        <li key={g.index} className="rounded bg-bg-base/60 p-2 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="font-medium text-ink">
+                              GPU {g.index} · {g.name}
+                            </span>
+                            <span className="text-ink-faint">{g.temperature_c}°C</span>
+                          </div>
+                          <div className="mt-1 flex items-center justify-between text-ink-dim">
+                            <span>util {g.util_percent.toFixed(0)}%</span>
+                            <span>
+                              vram {formatMib(g.memory_used_mib)} / {formatMib(g.memory_total_mib)}
+                            </span>
+                          </div>
+                          <div className="mt-1 h-1 overflow-hidden rounded-full bg-bg-hover">
+                            <div
+                              className="h-full bg-accent"
+                              style={{ width: `${used_pct}%` }}
+                            />
+                          </div>
+                          <div className="mt-1 h-1 overflow-hidden rounded-full bg-bg-hover">
+                            <div
+                              className="h-full bg-severity-ok"
+                              style={{ width: `${g.util_percent}%` }}
+                            />
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+                <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                  <div>
+                    <div className="text-ink-faint">Surya</div>
+                    <div className="mt-0.5 text-ink">
+                      {state.perf.surya_loaded ? "loaded" : "idle"} · {state.perf.surya_device}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-ink-faint">SigLIP 2</div>
+                    <div className="mt-0.5 text-ink">
+                      {state.perf.siglip_loaded ? "loaded" : "idle"} · {state.perf.siglip_device}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-ink-faint">CPU load avg</div>
+                    <div className="mt-0.5 font-mono text-ink">
+                      {state.perf.load_avg
+                        ? state.perf.load_avg.map((v) => v.toFixed(2)).join(" ")
+                        : "—"}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-ink-faint">cores</div>
+                    <div className="mt-0.5 text-ink">{state.perf.cpu_count}</div>
+                  </div>
+                </div>
+              </Card>
+            )}
 
             <Card title="Ollama">
               <div className="flex items-center gap-2">
@@ -129,6 +215,11 @@ export default function Dev() {
                 <span className="text-sm">
                   {state.ollama.reachable ? "reachable" : "unreachable"}
                 </span>
+                {state.ollama.latency_ms != null && (
+                  <span className="rounded bg-bg-hover px-1.5 py-0.5 text-[10px] text-ink-dim">
+                    {state.ollama.latency_ms.toFixed(0)} ms
+                  </span>
+                )}
                 <span className="ml-auto text-xs text-ink-faint">
                   {state.ollama.url}
                 </span>
@@ -306,6 +397,11 @@ function formatWhen(iso: string | null): string {
   } catch {
     return iso;
   }
+}
+
+function formatMib(mib: number): string {
+  if (mib >= 1024) return `${(mib / 1024).toFixed(1)} GB`;
+  return `${Math.round(mib)} MB`;
 }
 
 function formatBytes(bytes: number): string {

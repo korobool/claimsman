@@ -9,19 +9,22 @@ sense.
 """
 from __future__ import annotations
 
+import os
+import re
 import subprocess
+import time
 from pathlib import Path
 from typing import Annotated
 
 import httpx
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.web import __version__
 from apps.web.config import settings
 from apps.web.db import get_session
-from apps.web.models import Claim, Document, ExtractedField, Page, Upload
+from apps.web.models import AuditLog, Claim, Document, ExtractedField, Finding, Page, Upload
 from packages.schemas import get_domains, get_schemas
 
 router = APIRouter(prefix="/dev", tags=["dev"])
@@ -86,6 +89,27 @@ async def dev_state(
 
     ollama_status = await _ollama_status()
     git = _git_state()
+    perf = _perf_snapshot()
+
+    # Quick pipeline counters: in-flight vs ready claims, error rate.
+    in_flight = (
+        await session.execute(select(func.count(Claim.id)).where(Claim.status == "processing"))
+    ).scalar() or 0
+    ready = (
+        await session.execute(
+            select(func.count(Claim.id)).where(Claim.status == "ready_for_review")
+        )
+    ).scalar() or 0
+    errored = (
+        await session.execute(select(func.count(Claim.id)).where(Claim.status == "error"))
+    ).scalar() or 0
+    finding_count = (await session.execute(select(func.count(Finding.id)))).scalar() or 0
+
+    # Last 10 audit events — puts reviewer activity next to the build info.
+    audit_rows = await session.execute(
+        select(AuditLog).order_by(desc(AuditLog.created_at)).limit(10)
+    )
+    recent_audit = [r.to_dict() for r in audit_rows.scalars().all()]
 
     return {
         "app": {
@@ -94,6 +118,7 @@ async def dev_state(
             "env": settings.env,
             "port": settings.port,
             "base_url": f"http://{settings.host}:{settings.port}",
+            "uptime_s": round(time.time() - _PROC_START, 1),
         },
         "milestone": CURRENT_MILESTONE,
         "git": git,
@@ -113,10 +138,107 @@ async def dev_state(
             "documents": doc_count,
             "pages": page_count,
             "extracted_fields": ef_count,
+            "findings": finding_count,
+            "in_flight": in_flight,
+            "ready_for_review": ready,
+            "errored": errored,
         },
         "recent_claims": recent,
+        "recent_audit": recent_audit,
         "ollama": ollama_status,
+        "perf": perf,
     }
+
+
+_PROC_START = time.time()
+
+
+def _perf_snapshot() -> dict:
+    """Lightweight perf snapshot: GPU utilization via nvidia-smi, CPU
+    load average, torch device info. Everything is best-effort — a
+    missing tool just yields None for that field."""
+    info: dict = {
+        "torch": None,
+        "cuda_available": False,
+        "device_name": None,
+        "load_avg": list(os.getloadavg()) if hasattr(os, "getloadavg") else None,
+        "cpu_count": os.cpu_count(),
+        "gpus": [],
+        "surya_loaded": False,
+        "surya_device": "cpu",
+        "siglip_loaded": False,
+        "siglip_device": "cpu",
+    }
+    try:
+        import torch
+
+        info["torch"] = torch.__version__
+        info["cuda_available"] = torch.cuda.is_available()
+        if torch.cuda.is_available():
+            info["device_name"] = torch.cuda.get_device_name(0)
+    except Exception:  # noqa: BLE001
+        pass
+
+    gpus = _nvidia_smi()
+    if gpus:
+        info["gpus"] = gpus
+
+    # Surya / SigLIP load state (inspect the wrappers without triggering init)
+    try:
+        from packages.ocr.surya import _engine as _surya_engine  # noqa: PLC0415
+
+        if _surya_engine is not None:
+            info["surya_loaded"] = _surya_engine._initialized  # noqa: SLF001
+            info["surya_device"] = _surya_engine._device  # noqa: SLF001
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from packages.vision.siglip import _classifier as _siglip  # noqa: PLC0415
+
+        if _siglip is not None:
+            info["siglip_loaded"] = _siglip._initialized  # noqa: SLF001
+            info["siglip_device"] = _siglip._device  # noqa: SLF001
+    except Exception:  # noqa: BLE001
+        pass
+
+    return info
+
+
+def _nvidia_smi() -> list[dict]:
+    try:
+        out = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,name,utilization.gpu,memory.total,memory.free,memory.used,temperature.gpu",
+                "--format=csv,noheader,nounits",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        ).stdout
+    except Exception:  # noqa: BLE001
+        return []
+    gpus: list[dict] = []
+    for line in out.splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 7:
+            continue
+        try:
+            gpus.append(
+                {
+                    "index": int(parts[0]),
+                    "name": parts[1],
+                    "util_percent": float(parts[2]),
+                    "memory_total_mib": float(parts[3]),
+                    "memory_free_mib": float(parts[4]),
+                    "memory_used_mib": float(parts[5]),
+                    "temperature_c": float(parts[6]),
+                }
+            )
+        except ValueError:
+            continue
+    return gpus
 
 
 def _git_state() -> dict:
@@ -154,8 +276,10 @@ def _git(args: list[str]) -> str:
 async def _ollama_status() -> dict:
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
+            t0 = time.time()
             resp = await client.get(f"{settings.ollama_base_url}/api/tags")
             resp.raise_for_status()
+            latency_ms = (time.time() - t0) * 1000
             data = resp.json()
             models = [
                 {"name": m.get("name"), "size": m.get("size")}
@@ -165,6 +289,7 @@ async def _ollama_status() -> dict:
                 "reachable": True,
                 "url": settings.ollama_base_url,
                 "default_model": settings.ollama_default_model,
+                "latency_ms": round(latency_ms, 1),
                 "model_count": len(data.get("models") or []),
                 "models_sample": models,
             }

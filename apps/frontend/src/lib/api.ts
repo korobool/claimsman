@@ -161,6 +161,7 @@ export interface DevState {
     env: string;
     port: number;
     base_url: string;
+    uptime_s?: number;
   };
   milestone: {
     id: string;
@@ -186,6 +187,10 @@ export interface DevState {
     documents: number;
     pages: number;
     extracted_fields: number;
+    findings?: number;
+    in_flight?: number;
+    ready_for_review?: number;
+    errored?: number;
   };
   recent_claims: Array<{
     id: string;
@@ -196,14 +201,54 @@ export interface DevState {
     status: string;
     created_at: string | null;
   }>;
+  recent_audit?: Array<{
+    id: string;
+    actor: string;
+    entity: string;
+    entity_id: string | null;
+    action: string;
+    created_at: string | null;
+  }>;
   ollama: {
     reachable: boolean;
     url: string;
     default_model: string;
+    latency_ms?: number;
     model_count?: number;
     models_sample?: Array<{ name: string; size: number }>;
     error?: string;
   };
+  perf?: {
+    torch: string | null;
+    cuda_available: boolean;
+    device_name: string | null;
+    load_avg: number[] | null;
+    cpu_count: number;
+    gpus: Array<{
+      index: number;
+      name: string;
+      util_percent: number;
+      memory_total_mib: number;
+      memory_free_mib: number;
+      memory_used_mib: number;
+      temperature_c: number;
+    }>;
+    surya_loaded: boolean;
+    surya_device: string;
+    siglip_loaded: boolean;
+    siglip_device: string;
+  };
+}
+
+export interface AuditEntry {
+  id: string;
+  actor: string;
+  entity: string;
+  entity_id: string | null;
+  action: string;
+  before: unknown;
+  after: unknown;
+  created_at: string | null;
 }
 
 export interface Domain {
@@ -272,6 +317,15 @@ export const api = {
       { method: "POST", body: JSON.stringify({ description }) },
     ),
   devState: () => requestJson<DevState>("/api/v1/dev/state"),
+  auditEntries: (params?: { entity?: string; entity_id?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.entity) qs.set("entity", params.entity);
+    if (params?.entity_id) qs.set("entity_id", params.entity_id);
+    if (params?.limit) qs.set("limit", String(params.limit));
+    return requestJson<{ entries: AuditEntry[] }>(
+      `/api/v1/audit${qs.toString() ? `?${qs}` : ""}`,
+    );
+  },
   confirmDecision: (
     claimId: string,
     body: {
