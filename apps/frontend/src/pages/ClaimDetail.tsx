@@ -2,9 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   api,
+  type ClaimDecision,
   type ClaimDetail,
   type ClaimDocument,
   type ClaimPage,
+  type DecisionOutcome,
   type ExtractedField,
   type Finding,
   type OcrLine,
@@ -196,6 +198,16 @@ export default function ClaimDetailPage() {
               <PageSummary page={selectedPage} onHoverLine={setHoveredLine} hoveredLine={hoveredLine} />
             )}
 
+            {(claim.proposed_decision || claim.confirmed_decision) && (
+              <DecisionCard
+                claimId={claim.id}
+                status={claim.status}
+                proposed={claim.proposed_decision}
+                confirmed={claim.confirmed_decision}
+                onChanged={load}
+              />
+            )}
+
             {claim.findings && claim.findings.length > 0 && (
               <FindingsCard findings={claim.findings} summary={claim.findings_summary} />
             )}
@@ -382,6 +394,270 @@ function PageSummary({
       )}
     </div>
   );
+}
+
+function DecisionCard({
+  claimId,
+  status,
+  proposed,
+  confirmed,
+  onChanged,
+}: {
+  claimId: string;
+  status: string;
+  proposed: ClaimDecision | null;
+  confirmed: ClaimDecision | null;
+  onChanged: () => void;
+}) {
+  const active = confirmed ?? proposed;
+  if (!active) return null;
+  const isConfirmed = Boolean(confirmed);
+  const [saving, setSaving] = useState<DecisionOutcome | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [showEdit, setShowEdit] = useState(false);
+  const [editOutcome, setEditOutcome] = useState<DecisionOutcome>(
+    active.outcome ?? "approve",
+  );
+  const [editAmount, setEditAmount] = useState<string>(
+    active.amount != null ? String(active.amount) : "",
+  );
+  const [editRationale, setEditRationale] = useState<string>(
+    active.rationale_md ?? "",
+  );
+
+  const submit = async (outcome: DecisionOutcome, rationale?: string, amount?: number | null) => {
+    setSaving(outcome);
+    setError(null);
+    try {
+      await api.confirmDecision(claimId, {
+        outcome,
+        amount: amount ?? (active.amount ?? null),
+        currency: active.currency ?? null,
+        rationale_md: rationale ?? active.rationale_md ?? null,
+        reviewer: "reviewer",
+      });
+      onChanged();
+      setShowEdit(false);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const reopen = async () => {
+    try {
+      await api.reopenDecision(claimId);
+      onChanged();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  return (
+    <div className="mb-6 rounded-md border border-accent/40 bg-accent/5 p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="text-xs uppercase tracking-wide text-ink-faint">
+          {isConfirmed ? "Confirmed decision" : "Proposed decision"}
+        </div>
+        <OutcomeBadge outcome={active.outcome} />
+      </div>
+
+      <div className="mb-2 flex items-baseline gap-2 text-sm">
+        <span className="font-semibold text-ink">
+          {active.amount != null ? formatAmount(active.amount, active.currency) : "—"}
+        </span>
+        {active.llm_model && (
+          <span className="font-mono text-[10px] text-ink-faint">{active.llm_model}</span>
+        )}
+      </div>
+
+      {active.rationale_md && (
+        <div className="mb-3 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-bg-base/60 p-2 text-[11px] leading-snug text-ink">
+          {active.rationale_md}
+        </div>
+      )}
+
+      {error && (
+        <div className="mb-2 rounded border border-severity-error/40 bg-severity-error/10 px-2 py-1 text-[11px] text-severity-error">
+          {error}
+        </div>
+      )}
+
+      {!isConfirmed && !showEdit && (
+        <div className="flex flex-wrap gap-2 text-xs">
+          <ActionButton
+            label="Approve"
+            tone="ok"
+            disabled={saving !== null}
+            loading={saving === "approve"}
+            onClick={() => submit("approve")}
+          />
+          <ActionButton
+            label="Partial approve"
+            tone="warn"
+            disabled={saving !== null}
+            loading={saving === "partial_approve"}
+            onClick={() => submit("partial_approve")}
+          />
+          <ActionButton
+            label="Deny"
+            tone="error"
+            disabled={saving !== null}
+            loading={saving === "deny"}
+            onClick={() => submit("deny")}
+          />
+          <ActionButton
+            label="Needs info"
+            tone="info"
+            disabled={saving !== null}
+            loading={saving === "needs_info"}
+            onClick={() => submit("needs_info")}
+          />
+          <button
+            type="button"
+            onClick={() => setShowEdit(true)}
+            className="rounded-md border border-line px-3 py-1 text-xs text-ink-dim hover:text-ink"
+          >
+            Edit…
+          </button>
+        </div>
+      )}
+
+      {isConfirmed && (
+        <div className="flex items-center justify-between text-[11px] text-ink-dim">
+          <span>
+            confirmed by <span className="text-ink">{active.confirmed_by ?? "—"}</span>
+            {active.confirmed_at && <> · {new Date(active.confirmed_at).toLocaleString()}</>}
+          </span>
+          <button
+            type="button"
+            onClick={reopen}
+            className="rounded-md border border-line px-3 py-1 text-[11px] text-ink-dim hover:text-ink"
+          >
+            Reopen
+          </button>
+        </div>
+      )}
+
+      {showEdit && !isConfirmed && (
+        <div className="mt-2 space-y-2 rounded border border-line bg-bg-base/40 p-2 text-xs">
+          <div>
+            <label className="text-[10px] uppercase text-ink-faint">Outcome</label>
+            <select
+              value={editOutcome}
+              onChange={(e) => setEditOutcome(e.target.value as DecisionOutcome)}
+              className="mt-1 w-full rounded border border-line bg-bg-raised px-2 py-1"
+            >
+              <option value="approve">approve</option>
+              <option value="partial_approve">partial_approve</option>
+              <option value="deny">deny</option>
+              <option value="needs_info">needs_info</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-[10px] uppercase text-ink-faint">Amount</label>
+            <input
+              value={editAmount}
+              onChange={(e) => setEditAmount(e.target.value)}
+              className="mt-1 w-full rounded border border-line bg-bg-raised px-2 py-1"
+            />
+          </div>
+          <div>
+            <label className="text-[10px] uppercase text-ink-faint">Rationale</label>
+            <textarea
+              value={editRationale}
+              onChange={(e) => setEditRationale(e.target.value)}
+              rows={4}
+              className="mt-1 w-full rounded border border-line bg-bg-raised px-2 py-1 font-mono text-[11px]"
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setShowEdit(false)}
+              className="rounded border border-line px-3 py-1 text-[11px] text-ink-dim hover:text-ink"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={saving !== null}
+              onClick={() =>
+                submit(
+                  editOutcome,
+                  editRationale,
+                  editAmount ? Number(editAmount) : null,
+                )
+              }
+              className="rounded bg-accent px-3 py-1 text-[11px] font-medium text-[#0b0d10] hover:bg-accent-strong disabled:opacity-50"
+            >
+              Save & confirm
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="mt-2 text-[10px] uppercase tracking-wide text-ink-faint">
+        claim status: {status}
+      </div>
+    </div>
+  );
+}
+
+function ActionButton({
+  label,
+  tone,
+  disabled,
+  loading,
+  onClick,
+}: {
+  label: string;
+  tone: "ok" | "warn" | "error" | "info";
+  disabled?: boolean;
+  loading?: boolean;
+  onClick: () => void;
+}) {
+  const palette = {
+    ok: "border-severity-ok/50 text-severity-ok hover:bg-severity-ok/10",
+    warn: "border-severity-warn/50 text-severity-warn hover:bg-severity-warn/10",
+    error: "border-severity-error/50 text-severity-error hover:bg-severity-error/10",
+    info: "border-severity-info/50 text-severity-info hover:bg-severity-info/10",
+  } as const;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`rounded-md border px-3 py-1 font-medium disabled:opacity-40 ${palette[tone]}`}
+    >
+      {loading ? "…" : label}
+    </button>
+  );
+}
+
+function OutcomeBadge({ outcome }: { outcome: DecisionOutcome }) {
+  const map: Record<DecisionOutcome, string> = {
+    approve: "bg-severity-ok/15 text-severity-ok",
+    partial_approve: "bg-severity-warn/15 text-severity-warn",
+    deny: "bg-severity-error/15 text-severity-error",
+    needs_info: "bg-severity-info/15 text-severity-info",
+  };
+  return (
+    <span
+      className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${map[outcome]}`}
+    >
+      {outcome.replace("_", " ")}
+    </span>
+  );
+}
+
+function formatAmount(amount: number, currency: string | null): string {
+  const n = new Intl.NumberFormat(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount);
+  return currency ? `${n} ${currency}` : n;
 }
 
 function FindingsCard({

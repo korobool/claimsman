@@ -86,12 +86,36 @@ export interface Finding {
   refs: Record<string, unknown> | null;
 }
 
+export type DecisionOutcome =
+  | "approve"
+  | "partial_approve"
+  | "deny"
+  | "needs_info";
+
+export interface ClaimDecision {
+  id: string;
+  claim_id: string;
+  kind: string;
+  outcome: DecisionOutcome;
+  amount: number | null;
+  currency: string | null;
+  rationale_md: string | null;
+  is_proposed: boolean;
+  llm_model: string | null;
+  confirmed_by: string | null;
+  confirmed_at: string | null;
+  created_at: string | null;
+}
+
 export interface ClaimDetail extends ClaimSummary {
   uploads: ClaimUpload[];
   documents: ClaimDocument[];
   findings: Finding[];
   findings_by_severity: Record<"info" | "warning" | "error", Finding[]>;
   findings_summary: { error: number; warning: number; info: number };
+  proposed_decision: ClaimDecision | null;
+  confirmed_decision: ClaimDecision | null;
+  decisions: ClaimDecision[];
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -215,5 +239,29 @@ export const api = {
     }),
   deleteDomain: (code: string) =>
     requestJson<void>(`/api/v1/domains/${code}`, { method: "DELETE" }),
+  generateDomain: (description: string) =>
+    requestJson<{ proposal: Partial<Domain>; yaml: string; raw_response: string }>(
+      "/api/v1/domains/generate",
+      { method: "POST", body: JSON.stringify({ description }) },
+    ),
   devState: () => requestJson<DevState>("/api/v1/dev/state"),
+  confirmDecision: (
+    claimId: string,
+    body: {
+      outcome: DecisionOutcome;
+      amount?: number | null;
+      currency?: string | null;
+      rationale_md?: string | null;
+      reviewer?: string;
+    },
+  ) =>
+    requestJson<{ claim_status: string; decision: ClaimDecision }>(
+      `/api/v1/claims/${claimId}/decision/confirm`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  reopenDecision: (claimId: string) =>
+    requestJson<{ claim_status: string }>(
+      `/api/v1/claims/${claimId}/decision/reopen`,
+      { method: "POST", body: "{}" },
+    ),
 };

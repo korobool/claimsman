@@ -9,6 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from apps.web.models.base import Base, TimestampMixin, UUIDPKMixin
 
 if TYPE_CHECKING:
+    from apps.web.models.decision import Decision
     from apps.web.models.document import Document
     from apps.web.models.finding import Finding
     from apps.web.models.upload import Upload
@@ -50,6 +51,11 @@ class Claim(Base, UUIDPKMixin, TimestampMixin):
         lazy="selectin",
     )
     findings: Mapped[list["Finding"]] = relationship(
+        back_populates="claim",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    decisions: Mapped[list["Decision"]] = relationship(
         back_populates="claim",
         cascade="all, delete-orphan",
         lazy="selectin",

@@ -1,16 +1,27 @@
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from apps.web.db import get_session
 from apps.web.logging_setup import logger
-from apps.web.models import Claim, ClaimStatus, Document, Page, Upload
+from apps.web.models import (
+    AuditLog,
+    Claim,
+    ClaimStatus,
+    Decision,
+    DecisionOutcome,
+    Document,
+    Page,
+    Upload,
+)
 from apps.web.pipeline import enqueue_claim
 from apps.web.services.storage import storage
 
@@ -55,6 +66,13 @@ async def get_claim(
     findings_by_severity = {"error": [], "warning": [], "info": []}
     for f in claim.findings:
         findings_by_severity.setdefault(f.severity.value, []).append(f.to_dict())
+    decisions = sorted(
+        claim.decisions,
+        key=lambda d: (d.created_at or datetime.min),
+        reverse=True,
+    )
+    proposed = next((d for d in decisions if d.is_proposed), None)
+    confirmed = next((d for d in decisions if not d.is_proposed), None)
     return {
         **claim.to_dict(),
         "uploads": [u.to_dict() for u in claim.uploads],
@@ -65,6 +83,9 @@ async def get_claim(
             "warning": len(findings_by_severity.get("warning", [])),
             "info": len(findings_by_severity.get("info", [])),
         },
+        "proposed_decision": proposed.to_dict() if proposed else None,
+        "confirmed_decision": confirmed.to_dict() if confirmed else None,
+        "decisions": [d.to_dict() for d in decisions],
         "documents": [
             {
                 "id": str(d.id),
@@ -97,6 +118,94 @@ async def get_claim(
             for d in claim.documents
         ],
     }
+
+
+class DecisionActionIn(BaseModel):
+    outcome: str
+    amount: float | None = None
+    currency: str | None = None
+    rationale_md: str | None = None
+    reviewer: str | None = None
+
+
+@router.post("/{claim_id}/decision/confirm")
+async def confirm_decision(
+    claim_id: uuid.UUID,
+    payload: DecisionActionIn,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict:
+    claim = await _load_claim_full(session, claim_id)
+    try:
+        outcome = DecisionOutcome(payload.outcome)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid outcome")
+
+    proposed = next(
+        (d for d in sorted(claim.decisions, key=lambda d: d.created_at, reverse=True) if d.is_proposed),
+        None,
+    )
+
+    confirmed = Decision(
+        claim_id=claim.id,
+        kind="confirmed",
+        outcome=outcome,
+        amount=payload.amount if payload.amount is not None else (proposed.amount if proposed else None),
+        currency=payload.currency if payload.currency is not None else (proposed.currency if proposed else None),
+        rationale_md=payload.rationale_md
+        if payload.rationale_md is not None
+        else (proposed.rationale_md if proposed else None),
+        is_proposed=False,
+        llm_model=proposed.llm_model if proposed else None,
+        confirmed_by=payload.reviewer or "reviewer",
+        confirmed_at=datetime.now(timezone.utc),
+    )
+    session.add(confirmed)
+
+    if outcome == DecisionOutcome.NEEDS_INFO:
+        claim.status = ClaimStatus.ESCALATED
+    else:
+        claim.status = ClaimStatus.DECIDED
+
+    session.add(
+        AuditLog(
+            actor=payload.reviewer or "reviewer",
+            entity="claim",
+            entity_id=claim.id,
+            action=f"decision_confirm:{outcome.value}",
+            before_json={"proposed": proposed.to_dict() if proposed else None},
+            after_json=confirmed.to_dict(),
+        )
+    )
+
+    await session.commit()
+    logger.info(
+        "decision.confirmed",
+        claim_id=str(claim.id),
+        outcome=outcome.value,
+        reviewer=confirmed.confirmed_by,
+    )
+    await session.refresh(claim, ["decisions"])
+    return {"claim_status": claim.status.value, "decision": confirmed.to_dict()}
+
+
+@router.post("/{claim_id}/decision/reopen")
+async def reopen_decision(
+    claim_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict:
+    claim = await _load_claim_full(session, claim_id)
+    claim.status = ClaimStatus.UNDER_REVIEW
+    session.add(
+        AuditLog(
+            actor="reviewer",
+            entity="claim",
+            entity_id=claim.id,
+            action="decision_reopen",
+            after_json={"status": claim.status.value},
+        )
+    )
+    await session.commit()
+    return {"claim_status": claim.status.value}
 
 
 @router.get("/{claim_id}/pages/{page_id}/image")
@@ -215,6 +324,7 @@ async def _load_claim_full(session: AsyncSession, claim_id: uuid.UUID) -> Claim:
             selectinload(Claim.documents).selectinload(Document.pages),
             selectinload(Claim.documents).selectinload(Document.extracted_fields),
             selectinload(Claim.findings),
+            selectinload(Claim.decisions),
         )
         .where(Claim.id == claim_id)
     )

@@ -26,6 +26,8 @@ from apps.web.logging_setup import logger
 from apps.web.models import (
     Claim,
     ClaimStatus,
+    Decision,
+    DecisionOutcome,
     Document,
     ExtractedField,
     Finding,
@@ -33,7 +35,7 @@ from apps.web.models import (
     Severity,
     Upload,
 )
-from packages.extract import get_extractor
+from packages.extract import get_extractor, propose_decision
 from packages.ingest import IngestedDocument, SourceKind, ingest_file
 from packages.ocr import OcrResult, get_ocr_engine
 from packages.schemas import get_domains
@@ -80,10 +82,13 @@ async def run_claim_pipeline(claim_id: uuid.UUID) -> None:
             await session.commit()
             await _stage_analyze(session, claim)
             await session.commit()
+            await _stage_decide(session, claim)
+            claim.status = ClaimStatus.READY_FOR_REVIEW
+            await session.commit()
             logger.info(
                 "pipeline.done",
                 claim_id=str(claim_id),
-                stages="ingest+ocr+classify+extract+analyze",
+                stages="ingest+ocr+classify+extract+analyze+decide",
                 status=claim.status.value,
             )
     except Exception as exc:  # noqa: BLE001 — last-resort logger
@@ -491,6 +496,114 @@ async def _stage_analyze(session: AsyncSession, claim: Claim) -> None:
         info=count_by_severity.get("info", 0),
         warning=count_by_severity.get("warning", 0),
         error=count_by_severity.get("error", 0),
+    )
+
+
+async def _stage_decide(session: AsyncSession, claim: Claim) -> None:
+    """Propose a decision combining hard rule gates with LLM reasoning.
+
+    Hard gates:
+    - If any error-severity finding is present → recommendation defaults
+      to ``needs_info`` and we still ask the LLM for an explanation but
+      cap its outcome at the non-approve set.
+    - If no clinical/financial documents are present → ``needs_info``.
+
+    Soft judgment:
+    - Build a compact claim summary (domain, claimant, findings list,
+      per-document extracted fields) and ask Gemma 4 for a structured
+      decision proposal.
+    """
+    # Remove any previous proposed decisions for this claim so we start
+    # fresh on re-runs. Confirmed decisions are kept as revisions.
+    existing = await session.execute(
+        select(Decision).where(Decision.claim_id == claim.id).where(Decision.is_proposed == True)  # noqa: E712
+    )
+    for d in existing.scalars().all():
+        await session.delete(d)
+
+    findings_result = await session.execute(
+        select(Finding).where(Finding.claim_id == claim.id)
+    )
+    findings = findings_result.scalars().all()
+    has_error = any(f.severity == Severity.ERROR for f in findings)
+
+    doc_result = await session.execute(
+        select(Document)
+        .where(Document.claim_id == claim.id)
+        .options(selectinload(Document.extracted_fields))
+    )
+    documents = doc_result.scalars().all()
+
+    summary = {
+        "domain": claim.domain,
+        "claimant_name": claim.claimant_name,
+        "policy_number": claim.policy_number,
+        "title": claim.title,
+        "notes": claim.notes,
+        "findings": [
+            {"severity": f.severity.value, "code": f.code, "message": f.message}
+            for f in findings
+        ],
+        "documents": [
+            {
+                "doc_type": d.doc_type,
+                "display_name": d.display_name,
+                "fields": {ef.schema_key: ef.value_json for ef in d.extracted_fields},
+            }
+            for d in documents
+        ],
+        "hard_gate": {
+            "error_finding_present": has_error,
+            "instruction": (
+                "If error_finding_present is true, you MUST NOT choose 'approve'. "
+                "Prefer 'needs_info' or 'partial_approve' or 'deny' instead."
+            ),
+        },
+    }
+
+    try:
+        proposal = await propose_decision(
+            domain_code=claim.domain,
+            claim_summary=summary,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "pipeline.decide.error",
+            claim_id=str(claim.id),
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        return
+
+    outcome = proposal.outcome
+    if has_error and outcome == "approve":
+        outcome = "needs_info"
+
+    try:
+        outcome_enum = DecisionOutcome(outcome)
+    except ValueError:
+        outcome_enum = DecisionOutcome.NEEDS_INFO
+
+    session.add(
+        Decision(
+            claim_id=claim.id,
+            kind="proposed",
+            outcome=outcome_enum,
+            amount=proposal.amount,
+            currency=proposal.currency,
+            rationale_md=proposal.rationale,
+            is_proposed=True,
+            llm_model=proposal.model,
+        )
+    )
+    logger.info(
+        "pipeline.decide.proposed",
+        claim_id=str(claim.id),
+        outcome=outcome_enum.value,
+        amount=proposal.amount,
+        model=proposal.model,
+        llm_confidence=proposal.confidence,
+        had_error_finding=has_error,
     )
 
 

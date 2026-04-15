@@ -28,21 +28,25 @@ router = APIRouter(prefix="/dev", tags=["dev"])
 
 
 CURRENT_MILESTONE = {
-    "id": "M3",
-    "label": "LLM extraction + Domain admin + BBox overlay",
-    "phase": "M3",
+    "id": "M5",
+    "label": "Decisioning engine + reviewer workflow",
+    "phase": "M5",
     "description": (
-        "Seeded schemas/domains, Ollama Gemma 4 vision extraction wired "
-        "into the pipeline, polygon bounding-box overlay with confidence "
-        "colors, Domains CRUD admin UI. Next: findings engine (M4), "
-        "reviewer workflow + decisioning (M5)."
+        "Deterministic rule gates + Gemma 4 reasoning propose a decision "
+        "(approve / partial / deny / needs_info), amount, and markdown "
+        "rationale. Reviewer approve/edit/reject actions persist as "
+        "audited Decision rows and transition the claim state."
     ),
-    "completed_milestones": ["M1", "M2 (skeleton)", "M2.4a (ingest)", "M2.4b (OCR + classify)"],
+    "completed_milestones": [
+        "M1 — skeleton",
+        "M2.4a — in-process pipeline + ingest",
+        "M2.4b — Surya OCR + SigLIP classification",
+        "M3 — LLM extraction + schemas/domains + bbox overlay + Domains admin",
+        "M4 — findings engine + health/motor rule modules",
+    ],
     "next_milestones": [
-        "M4 — findings engine + domain rules",
-        "M5 — decisioning engine + reviewer workflow",
-        "M6 — admin UIs for schemas, LLM, health",
-        "M7 — accessibility + polish",
+        "M6 — admin UIs (Schemas, LLM, Health)",
+        "M7 — accessibility + polish + runbook",
     ],
 }
 

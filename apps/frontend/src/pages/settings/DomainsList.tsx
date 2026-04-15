@@ -21,6 +21,9 @@ export default function DomainsList() {
   const [creating, setCreating] = useState(false);
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const [genDescription, setGenDescription] = useState("");
+  const [genBusy, setGenBusy] = useState(false);
   const navigate = useNavigate();
 
   const load = useCallback(() => {
@@ -62,6 +65,43 @@ export default function DomainsList() {
     }
   };
 
+  const onGenerate = async () => {
+    if (genDescription.trim().length < 10) {
+      setError("Describe the domain in at least 10 characters.");
+      return;
+    }
+    setError(null);
+    setGenBusy(true);
+    try {
+      const res = await api.generateDomain(genDescription.trim());
+      const p = res.proposal;
+      if (!p.code) {
+        setError("LLM did not return a code for the new domain.");
+        return;
+      }
+      await api.createDomain({
+        code: p.code,
+        display_name: p.display_name ?? p.code,
+        description: p.description ?? "",
+        vocabulary: (p.vocabulary as Record<string, unknown>) ?? {},
+        required_documents: (p.required_documents as Array<Record<string, string[]>>) ?? [],
+        rule_module: p.rule_module ?? p.code,
+        decision_prompt_snippet: p.decision_prompt_snippet ?? "",
+        thresholds: (p.thresholds as Record<string, unknown>) ?? {
+          low_confidence: 0.8,
+          amount_tolerance: 0.02,
+        },
+      });
+      setGenerating(false);
+      setGenDescription("");
+      navigate(`/settings/domains/${p.code}`);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGenBusy(false);
+    }
+  };
+
   const onDelete = async (c: string) => {
     if (!confirm(`Delete domain “${c}”? This removes the YAML file from disk.`)) return;
     try {
@@ -82,14 +122,57 @@ export default function DomainsList() {
             decisioning snippet. Seeded defaults live under <code>config/domains/</code>.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setCreating((v) => !v)}
-          className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-[#0b0d10] hover:bg-accent-strong"
-        >
-          {creating ? "Cancel" : "New domain"}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setGenerating((v) => !v);
+              setCreating(false);
+            }}
+            className="rounded-md border border-severity-ok/50 bg-severity-ok/10 px-3 py-1.5 text-sm font-medium text-severity-ok hover:bg-severity-ok/20"
+          >
+            {generating ? "Cancel" : "Generate with LLM"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setCreating((v) => !v);
+              setGenerating(false);
+            }}
+            className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-[#0b0d10] hover:bg-accent-strong"
+          >
+            {creating ? "Cancel" : "New domain"}
+          </button>
+        </div>
       </header>
+
+      {generating && (
+        <div className="mb-6 rounded-md border border-severity-ok/40 bg-severity-ok/5 p-4">
+          <div className="mb-2 flex items-center justify-between">
+            <div className="text-sm font-medium text-ink">Generate from description</div>
+            <span className="text-xs text-ink-faint">
+              Gemma 4 will propose code, vocabulary, required docs, and thresholds.
+            </span>
+          </div>
+          <textarea
+            value={genDescription}
+            onChange={(e) => setGenDescription(e.target.value)}
+            rows={4}
+            placeholder="e.g. Travel insurance claims for trip cancellation, medical evacuation, and lost baggage. Covers EU and international trips."
+            className="w-full rounded-md border border-line bg-bg-base px-3 py-2 text-sm outline-none focus:border-accent"
+          />
+          <div className="mt-3 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={onGenerate}
+              disabled={genBusy}
+              className="rounded-md bg-severity-ok px-4 py-1.5 text-sm font-medium text-[#0b0d10] hover:bg-severity-ok/90 disabled:opacity-60"
+            >
+              {genBusy ? "Thinking…" : "Generate & open editor"}
+            </button>
+          </div>
+        </div>
+      )}
 
       {creating && (
         <div className="mb-6 rounded-md border border-line bg-bg-raised p-4">

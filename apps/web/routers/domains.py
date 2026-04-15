@@ -15,6 +15,7 @@ from fastapi import APIRouter, Body, HTTPException, status
 from pydantic import BaseModel, Field
 
 from apps.web.logging_setup import logger
+from packages.extract import generate_domain_from_description
 from packages.schemas import DomainPack, get_domains
 
 router = APIRouter(prefix="/domains", tags=["domains"])
@@ -35,6 +36,11 @@ class DomainIn(BaseModel):
 
 class DomainYamlIn(BaseModel):
     yaml: str
+
+
+class DomainGenerateIn(BaseModel):
+    description: str
+    model: str | None = None
 
 
 @router.get("")
@@ -103,6 +109,44 @@ async def update_domain_yaml(code: str, payload: DomainYamlIn) -> dict:
         raise HTTPException(status_code=400, detail="reload failed — yaml invalid?")
     logger.info("domain.yaml_updated", code=code, source_path=str(path))
     return _pack_to_api(pack)
+
+
+@router.post("/generate")
+async def generate_domain(payload: DomainGenerateIn) -> dict:
+    """Ask Gemma 4 to scaffold a new domain pack from a natural-language
+    description. Does NOT persist — returns the generated YAML and
+    structured fields so the admin can review and save."""
+    if len(payload.description.strip()) < 10:
+        raise HTTPException(
+            status_code=400,
+            detail="description must be at least 10 characters",
+        )
+    result = await generate_domain_from_description(
+        payload.description,
+        model=payload.model,
+    )
+    if result.error:
+        raise HTTPException(status_code=502, detail=f"LLM error: {result.error}")
+    payload_dict = {
+        "code": result.code or "new_domain",
+        "display_name": result.display_name or "New domain",
+        "description": result.description or "",
+        "vocabulary": result.vocabulary,
+        "required_documents": result.required_documents,
+        "rule_module": result.rule_module or result.code or "new_domain",
+        "decision_prompt_snippet": result.decision_prompt_snippet,
+        "thresholds": result.thresholds,
+    }
+    logger.info(
+        "domain.generate",
+        proposed_code=result.code,
+        proposed_display_name=result.display_name,
+    )
+    return {
+        "proposal": payload_dict,
+        "yaml": _yaml_dump(payload_dict),
+        "raw_response": result.raw_response,
+    }
 
 
 @router.delete("/{code}", status_code=status.HTTP_204_NO_CONTENT)
