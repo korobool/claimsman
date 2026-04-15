@@ -17,6 +17,12 @@ dependencies = [
     "Pillow>=10.0",
     "pypdfium2>=4.30",
     "python-docx>=1.1",
+    "surya-ocr>=0.17",
+    "transformers>=4.45",
+    "sentencepiece>=0.2",
+    "protobuf>=4.25",
+    "scipy>=1.13",
+    "numpy>=1.26",
 ]
 
 [project.optional-dependencies]

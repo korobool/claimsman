@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections import Counter
 from pathlib import Path
 
+from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -23,6 +25,8 @@ from apps.web.db import SessionLocal
 from apps.web.logging_setup import logger
 from apps.web.models import Claim, ClaimStatus, Document, Page, Upload
 from packages.ingest import IngestedDocument, SourceKind, ingest_file
+from packages.ocr import OcrResult, get_ocr_engine
+from packages.vision import get_classifier
 
 
 def enqueue_claim(claim_id: uuid.UUID) -> asyncio.Task:
@@ -56,14 +60,15 @@ async def run_claim_pipeline(claim_id: uuid.UUID) -> None:
             await session.commit()
 
             await _stage_ingest(session, claim)
-            # Later: normalize, ocr, classify, group, extract, assemble,
-            # analyze, decide. For now stop here and leave the claim in
-            # PROCESSING so the reviewer can see pages without a decision.
+            await session.commit()
+            await _stage_ocr(session, claim)
+            await session.commit()
+            await _stage_classify(session, claim)
             await session.commit()
             logger.info(
                 "pipeline.done",
                 claim_id=str(claim_id),
-                stage="ingest",
+                stages="ingest+ocr+classify",
                 status=claim.status.value,
             )
     except Exception as exc:  # noqa: BLE001 — last-resort logger
@@ -161,6 +166,122 @@ def _doc_type_for_source(ing: IngestedDocument) -> str:
     if ing.kind == SourceKind.DOCX:
         return "correspondence"
     return "unknown"
+
+
+async def _stage_ocr(session: AsyncSession, claim: Claim) -> None:
+    """Run Surya OCR on every page that needs it."""
+    # Freshly load the claim with pages (the previous stage_ingest
+    # added new rows; we need to see them here).
+    result = await session.execute(
+        select(Page)
+        .join(Document)
+        .where(Document.claim_id == claim.id)
+        .order_by(Document.id, Page.page_index)
+    )
+    pages = result.scalars().all()
+
+    for page in pages:
+        if page.ocr_text and not page.bbox_json:
+            # Text-layer PDF: we already have text; skip OCR.
+            continue
+        if page.bbox_json:
+            # Already OCR'd in an earlier run.
+            continue
+        if not page.image_path:
+            continue
+        try:
+            ocr = await asyncio.to_thread(_run_ocr_on_path, Path(page.image_path))
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "pipeline.ocr.error",
+                claim_id=str(claim.id),
+                page_id=str(page.id),
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            continue
+
+        page.ocr_text = ocr.text
+        page.bbox_json = ocr.to_dict()
+        logger.info(
+            "pipeline.ocr.page",
+            claim_id=str(claim.id),
+            page_id=str(page.id),
+            lines=len(ocr.lines),
+            mean_confidence=round(ocr.mean_confidence, 3),
+        )
+
+
+def _run_ocr_on_path(image_path: Path) -> OcrResult:
+    engine = get_ocr_engine()
+    with Image.open(image_path) as img:
+        return engine.recognize(img)
+
+
+async def _stage_classify(session: AsyncSession, claim: Claim) -> None:
+    """Run SigLIP 2 zero-shot classification on every page image, then
+    assign the Document.doc_type by majority vote."""
+    result = await session.execute(
+        select(Page)
+        .join(Document)
+        .where(Document.claim_id == claim.id)
+        .options(selectinload(Page.document))
+        .order_by(Document.id, Page.page_index)
+    )
+    pages = result.scalars().all()
+
+    per_doc_labels: dict[uuid.UUID, list[str]] = {}
+
+    for page in pages:
+        if page.classification:
+            per_doc_labels.setdefault(page.document_id, []).append(page.classification)
+            continue
+        if not page.image_path:
+            continue
+        try:
+            classification = await asyncio.to_thread(_run_classify_on_path, Path(page.image_path))
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "pipeline.classify.error",
+                claim_id=str(claim.id),
+                page_id=str(page.id),
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            continue
+
+        label = _normalize_label(classification.label)
+        page.classification = label
+        page.confidence = classification.score
+        per_doc_labels.setdefault(page.document_id, []).append(label)
+        logger.info(
+            "pipeline.classify.page",
+            claim_id=str(claim.id),
+            page_id=str(page.id),
+            label=label,
+            score=round(classification.score, 3),
+        )
+
+    # Assign a doc_type to each Document based on the majority label.
+    for doc_id, labels in per_doc_labels.items():
+        if not labels:
+            continue
+        winner, _ = Counter(labels).most_common(1)[0]
+        doc = await session.get(Document, doc_id)
+        if doc is not None and doc.doc_type in ("unknown", ""):
+            doc.doc_type = winner
+
+
+def _run_classify_on_path(image_path: Path):
+    classifier = get_classifier()
+    with Image.open(image_path) as img:
+        return classifier.classify(img)
+
+
+def _normalize_label(label: str) -> str:
+    """Turn "medical report" → "medical_report" so labels match the
+    snake_case doc_type convention used in config/schemas/*.yaml."""
+    return label.strip().lower().replace(" ", "_")
 
 
 async def _load_claim_with_uploads(

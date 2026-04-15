@@ -45,6 +45,8 @@ export interface ClaimPage {
   has_image: boolean;
   text_layer_used: boolean;
   ocr_preview: string | null;
+  ocr_text: string | null;
+  line_count: number;
 }
 
 export interface ClaimDocument {

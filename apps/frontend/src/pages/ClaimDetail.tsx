@@ -121,19 +121,20 @@ export default function ClaimDetailPage() {
                       onClick={() => setSelectedPageId(page.id)}
                       aria-label={`${doc.display_name ?? "document"} page ${page.page_index + 1}`}
                       className={[
-                        "flex w-full items-center justify-between rounded px-2 py-1 text-left text-xs",
+                        "flex w-full items-center justify-between gap-2 rounded px-2 py-1 text-left text-xs",
                         selectedPageId === page.id
                           ? "bg-accent/15 text-ink"
                           : "text-ink-dim hover:bg-bg-hover hover:text-ink",
                       ].join(" ")}
                     >
-                      <span>Page {page.page_index + 1}</span>
-                      <span className="text-ink-faint">
-                        {page.text_layer_used
-                          ? "text"
-                          : page.has_image
-                            ? "image"
-                            : "—"}
+                      <span className="truncate">Page {page.page_index + 1}</span>
+                      <span
+                        className={[
+                          "shrink-0 rounded-full px-1.5 py-0.5 text-[10px] uppercase tracking-wide",
+                          confidenceClass(page.confidence),
+                        ].join(" ")}
+                      >
+                        {page.classification ? page.classification : page.text_layer_used ? "text" : "…"}
                       </span>
                     </button>
                   </li>
@@ -152,6 +153,46 @@ export default function ClaimDetailPage() {
               <div className="text-xs uppercase tracking-wide text-ink-faint">Status</div>
               <div className="mt-1"><StatusPill status={claim.status} /></div>
             </div>
+            {selectedPage && (
+              <div className="mb-6 rounded-md border border-line/60 bg-bg-base p-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="text-xs uppercase tracking-wide text-ink-faint">
+                    Page {selectedPage.page_index + 1}
+                  </div>
+                  {selectedPage.classification ? (
+                    <span
+                      className={[
+                        "rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide",
+                        confidenceClass(selectedPage.confidence),
+                      ].join(" ")}
+                    >
+                      {selectedPage.classification}
+                      {selectedPage.confidence != null
+                        ? ` · ${Math.round(selectedPage.confidence * 100)}%`
+                        : ""}
+                    </span>
+                  ) : (
+                    <span className="text-[10px] uppercase text-ink-faint">unclassified</span>
+                  )}
+                </div>
+                <div className="text-[11px] text-ink-faint">
+                  {selectedPage.line_count > 0
+                    ? `${selectedPage.line_count} OCR lines`
+                    : selectedPage.text_layer_used
+                      ? "text layer only"
+                      : "OCR pending"}
+                </div>
+                {selectedPage.ocr_preview && (
+                  <div className="mt-3 max-h-48 overflow-auto whitespace-pre-wrap font-mono text-[11px] leading-snug text-ink">
+                    {selectedPage.ocr_preview}
+                    {selectedPage.ocr_text &&
+                      selectedPage.ocr_text.length > selectedPage.ocr_preview.length && (
+                        <span className="text-ink-faint"> …</span>
+                      )}
+                  </div>
+                )}
+              </div>
+            )}
             <Meta label="Claimant" value={claim.claimant_name} />
             <Meta label="Policy" value={claim.policy_number} />
             <Meta label="Domain" value={claim.domain} />
@@ -254,4 +295,11 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function confidenceClass(confidence: number | null | undefined): string {
+  if (confidence == null) return "bg-bg-hover text-ink-dim";
+  if (confidence >= 0.93) return "bg-severity-ok/15 text-severity-ok";
+  if (confidence >= 0.8) return "bg-severity-warn/15 text-severity-warn";
+  return "bg-severity-error/15 text-severity-error";
 }

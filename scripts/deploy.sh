@@ -47,6 +47,13 @@ fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
 pip install --upgrade pip >/dev/null
+# Install torch separately from the CPU wheel index so we don't compete
+# for VRAM with other workloads on the dev server. If torch is already
+# installed, this is a fast no-op.
+if ! python -c "import torch" >/dev/null 2>&1; then
+  echo "[deploy] installing torch CPU wheel"
+  pip install torch --index-url https://download.pytorch.org/whl/cpu
+fi
 pip install -r requirements.txt
 
 # 5a. DB migrations

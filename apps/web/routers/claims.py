@@ -69,7 +69,13 @@ async def get_claim(
                         "confidence": p.confidence,
                         "has_image": bool(p.image_path),
                         "text_layer_used": p.text_layer_used,
-                        "ocr_preview": (p.ocr_text or "")[:160] if p.ocr_text else None,
+                        "ocr_text": p.ocr_text,
+                        "ocr_preview": (p.ocr_text or "")[:600] if p.ocr_text else None,
+                        "line_count": (
+                            len((p.bbox_json or {}).get("lines", []))
+                            if isinstance(p.bbox_json, dict)
+                            else 0
+                        ),
                     }
                     for p in sorted(d.pages, key=lambda x: x.page_index)
                 ],
