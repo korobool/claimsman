@@ -572,10 +572,21 @@ function PageViewer({
                 className={tool === "add_bbox" ? "pointer-events-none" : "pointer-events-auto"}
                 onMouseEnter={() => onHoverLine(i)}
                 onMouseLeave={() => onHoverLine(null)}
-                onClick={() => startEditLine(i, line.text)}
+                onClick={() => {
+                  // single-click only jumps into edit when the edit-text
+                  // tool is selected
+                  if (tool === "edit_text") startEditLine(i, line.text);
+                }}
+                onDoubleClick={(e) => {
+                  // double-click always opens the inline editor,
+                  // regardless of tool mode
+                  e.stopPropagation();
+                  setEditingIndex(i);
+                  setEditingText(line.text);
+                }}
               >
                 <title>
-                  {line.text} ({Math.round(line.confidence * 100)}%)
+                  Double-click to edit: {line.text} ({Math.round(line.confidence * 100)}%)
                 </title>
               </polygon>
             );
@@ -631,40 +642,76 @@ function PageViewer({
         </div>
       )}
 
-      {editingIndex != null && (
-        <div className="absolute inset-x-0 bottom-2 flex justify-center">
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              commitLineEdit();
-            }}
-            className="flex items-center gap-2 rounded-md border border-severity-warn/60 bg-bg-raised/95 px-3 py-2 shadow-lg"
+      {editingIndex != null && (() => {
+        const line = lines[editingIndex];
+        const origText = line?.text ?? "";
+        const conf = line?.confidence ?? 0;
+        return (
+          <div
+            className="absolute inset-x-0 bottom-4 flex justify-center px-4"
+            onClick={(e) => e.stopPropagation()}
           >
-            <span className="text-[10px] uppercase tracking-wide text-ink-faint">
-              Edit line #{editingIndex + 1}
-            </span>
-            <input
-              autoFocus
-              value={editingText}
-              onChange={(e) => setEditingText(e.target.value)}
-              className="w-96 rounded border border-line bg-bg-base px-2 py-1 text-xs outline-none focus:border-accent"
-            />
-            <button
-              type="submit"
-              className="rounded bg-accent px-3 py-1 text-[11px] font-medium text-[#0b0d10] hover:bg-accent-strong"
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                commitLineEdit();
+              }}
+              className="w-full max-w-2xl rounded-lg border border-accent/60 bg-bg-raised/95 p-4 shadow-xl"
             >
-              Save
-            </button>
-            <button
-              type="button"
-              onClick={cancelLineEdit}
-              className="rounded border border-line px-3 py-1 text-[11px] text-ink-dim hover:text-ink"
-            >
-              Cancel
-            </button>
-          </form>
-        </div>
-      )}
+              <div className="mb-2 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="rounded bg-accent/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
+                    Edit line #{editingIndex + 1}
+                  </span>
+                  <span className="text-[11px] text-ink-faint">
+                    original OCR confidence {Math.round(conf * 100)}%
+                  </span>
+                </div>
+                <div className="text-[11px] text-ink-faint">
+                  ⏎ save · esc cancel
+                </div>
+              </div>
+              <textarea
+                autoFocus
+                value={editingText}
+                onChange={(e) => setEditingText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    cancelLineEdit();
+                  }
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey || !e.shiftKey)) {
+                    e.preventDefault();
+                    commitLineEdit();
+                  }
+                }}
+                rows={Math.max(1, Math.min(6, Math.ceil(editingText.length / 80) + 1))}
+                className="w-full resize-y rounded-md border border-line bg-bg-base px-3 py-2 font-mono text-sm text-ink outline-none focus:border-accent"
+              />
+              <div className="mt-2 flex items-center justify-between text-[11px]">
+                <div className="truncate text-ink-faint" title={origText}>
+                  was: {origText.slice(0, 120) || "(empty)"}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={cancelLineEdit}
+                    className="rounded border border-line px-3 py-1 text-ink-dim hover:text-ink"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="rounded bg-accent px-4 py-1 font-medium text-[#0b0d10] hover:bg-accent-strong"
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        );
+      })()}
     </div>
   );
 }
