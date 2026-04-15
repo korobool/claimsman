@@ -47,13 +47,73 @@ fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
 pip install --upgrade pip >/dev/null
-# Install torch separately from the CPU wheel index so we don't compete
-# for VRAM with other workloads on the dev server. If torch is already
-# installed, this is a fast no-op.
-if ! python -c "import torch" >/dev/null 2>&1; then
-  echo "[deploy] installing torch CPU wheel"
-  pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+# --- torch install: auto-detect GPU ------------------------------------
+# Pick the right torch wheel for the host:
+#   - if nvidia-smi is present and CLAIMSMAN_TORCH_CPU is not set → cu128
+#     (the latest CUDA wheel that ships torch 2.11 at time of writing,
+#      chosen to match Surya 0.17's torch>=2.7 requirement)
+#   - otherwise → cpu
+# You can force either mode with CLAIMSMAN_TORCH_CPU=1 or
+# CLAIMSMAN_TORCH_INDEX=<url>.
+TORCH_INDEX="${CLAIMSMAN_TORCH_INDEX:-}"
+if [ -z "$TORCH_INDEX" ]; then
+  if [ -n "${CLAIMSMAN_TORCH_CPU:-}" ]; then
+    TORCH_INDEX="https://download.pytorch.org/whl/cpu"
+  elif command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
+    TORCH_INDEX="https://download.pytorch.org/whl/cu128"
+  else
+    TORCH_INDEX="https://download.pytorch.org/whl/cpu"
+  fi
 fi
+echo "[deploy] torch index: $TORCH_INDEX"
+
+# Check if the installed torch matches what we want (GPU vs CPU).
+_torch_info() {
+  python - <<'PY' 2>/dev/null || true
+try:
+    import torch
+    print(torch.__version__, "cuda" if torch.cuda.is_available() else "cpu")
+except Exception:
+    pass
+PY
+}
+_current=$(_torch_info | tr -d '\n')
+if [ -z "$_current" ]; then
+  echo "[deploy] installing torch ($TORCH_INDEX)"
+  pip install --quiet torch --index-url "$TORCH_INDEX"
+else
+  # Re-install if we want cuda but installed is CPU, or vice versa.
+  want_cuda=false
+  case "$TORCH_INDEX" in
+    *cu*) want_cuda=true ;;
+  esac
+  has_cuda=false
+  case "$_current" in
+    *cuda*) has_cuda=true ;;
+  esac
+  if [ "$want_cuda" = "$has_cuda" ]; then
+    echo "[deploy] torch already installed: $_current"
+  else
+    echo "[deploy] switching torch: $_current → $TORCH_INDEX"
+    pip uninstall -y torch >/dev/null
+    pip install --quiet torch --index-url "$TORCH_INDEX"
+  fi
+fi
+
+# Auto-enable GPU device for Surya + SigLIP if we just installed a
+# CUDA wheel. Anything the user explicitly set in .env wins.
+if python -c "import torch; exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
+  if ! grep -q "^CLAIMSMAN_SURYA_DEVICE=" .env 2>/dev/null; then
+    echo "CLAIMSMAN_SURYA_DEVICE=cuda" >> .env
+    echo "[deploy] set CLAIMSMAN_SURYA_DEVICE=cuda in .env"
+  fi
+  if ! grep -q "^CLAIMSMAN_SIGLIP_DEVICE=" .env 2>/dev/null; then
+    echo "CLAIMSMAN_SIGLIP_DEVICE=cuda" >> .env
+    echo "[deploy] set CLAIMSMAN_SIGLIP_DEVICE=cuda in .env"
+  fi
+fi
+
 pip install -r requirements.txt
 
 # 5a. DB migrations
