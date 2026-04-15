@@ -270,6 +270,35 @@ function PageViewer({
   hoveredLine: number | null;
   onHoverLine: (i: number | null) => void;
 }) {
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  const [rendered, setRendered] = useState<{ width: number; height: number } | null>(
+    null,
+  );
+
+  useEffect(() => {
+    // Reset measurement when the selected page changes so the overlay
+    // never shows at the previous page's dimensions.
+    setRendered(null);
+  }, [page.id]);
+
+  useEffect(() => {
+    const img = imgRef.current;
+    if (!img) return;
+    const update = () => {
+      if (img.clientWidth > 0 && img.clientHeight > 0) {
+        setRendered({ width: img.clientWidth, height: img.clientHeight });
+      }
+    };
+    if (img.complete) update();
+    const observer = new ResizeObserver(update);
+    observer.observe(img);
+    img.addEventListener("load", update);
+    return () => {
+      observer.disconnect();
+      img.removeEventListener("load", update);
+    };
+  }, [page.id]);
+
   if (!page.has_image) {
     return (
       <div className="max-w-xl rounded-lg border border-line bg-bg-raised p-6 text-sm text-ink-dim">
@@ -281,23 +310,34 @@ function PageViewer({
     );
   }
 
-  const w = page.width ?? 1;
-  const h = page.height ?? 1;
+  const nativeW = page.width ?? 1;
+  const nativeH = page.height ?? 1;
   const lines = page.ocr_lines ?? [];
 
+  // Wrapper is sized exactly to the rendered img (in CSS pixels). The
+  // SVG then uses an absolute overlay at the same size, and its
+  // coordinate system uses the native page pixels via viewBox so the
+  // polygons map 1:1 onto the scaled image.
+  const wrapperStyle: React.CSSProperties = rendered
+    ? { width: rendered.width, height: rendered.height }
+    : {};
+
   return (
-    <div className="relative inline-block max-h-full max-w-full">
+    <div className="relative" style={wrapperStyle}>
       <img
+        ref={imgRef}
         key={page.id}
         alt={`Page ${page.page_index + 1}`}
         src={`/api/v1/claims/${claimId}/pages/${page.id}/image`}
-        className="block max-h-full max-w-full rounded-md border border-line bg-white shadow-lg"
+        className="block max-h-[calc(100vh-180px)] max-w-full rounded-md border border-line bg-white shadow-lg"
       />
-      {showBoxes && lines.length > 0 && (
+      {showBoxes && lines.length > 0 && rendered && (
         <svg
-          className="pointer-events-none absolute inset-0 h-full w-full"
-          viewBox={`0 0 ${w} ${h}`}
-          preserveAspectRatio="xMidYMid meet"
+          className="pointer-events-none absolute left-0 top-0"
+          width={rendered.width}
+          height={rendered.height}
+          viewBox={`0 0 ${nativeW} ${nativeH}`}
+          preserveAspectRatio="none"
         >
           {lines.map((line, i) => {
             const points = polygonPoints(line);
@@ -308,9 +348,10 @@ function PageViewer({
               <polygon
                 key={i}
                 points={points}
-                fill={highlighted ? `${color}26` : `${color}12`}
+                fill={highlighted ? `${color}33` : `${color}14`}
                 stroke={color}
-                strokeWidth={highlighted ? 3 : 1.5}
+                strokeWidth={(highlighted ? 3 : 1.2) * (nativeW / rendered.width)}
+                vectorEffect="non-scaling-stroke"
                 className="pointer-events-auto cursor-crosshair"
                 onMouseEnter={() => onHoverLine(i)}
                 onMouseLeave={() => onHoverLine(null)}

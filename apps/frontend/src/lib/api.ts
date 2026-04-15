@@ -309,4 +309,86 @@ export const api = {
       `/api/v1/claims/${claimId}/pages/${pageId}/bboxes`,
       { method: "POST", body: JSON.stringify(body) },
     ),
+  llmStatus: () =>
+    requestJson<{
+      reachable: boolean;
+      base_url: string;
+      default_model: string;
+      model_count?: number;
+      error?: string;
+    }>("/api/v1/llm/status"),
+  llmModels: () =>
+    requestJson<{
+      models: Array<{
+        name: string;
+        size: number | null;
+        modified_at: string | null;
+        digest: string | null;
+        family: string | null;
+        parameter_size: string | null;
+        vision: boolean;
+        is_default: boolean;
+      }>;
+      default_model: string;
+    }>("/api/v1/llm/models"),
+  llmPull: (tag: string) =>
+    requestJson<{ job_id: string; status: string; tag: string }>(
+      "/api/v1/llm/pull",
+      { method: "POST", body: JSON.stringify({ tag }) },
+    ),
+  llmPullStatus: (jobId: string) =>
+    requestJson<{
+      job_id: string;
+      tag: string;
+      status: string;
+      message: string;
+      total: number;
+      completed: number;
+      events: Array<{ status: string; completed: number; total: number }>;
+    }>(`/api/v1/llm/pull/${jobId}`),
+  healthPanels: () =>
+    requestJson<{
+      process: Record<string, unknown>;
+      device: Record<string, unknown>;
+      database: Record<string, unknown>;
+      ollama: Record<string, unknown>;
+      surya: Record<string, unknown>;
+      siglip: Record<string, unknown>;
+    }>("/api/v1/health/panels"),
+  listSchemas: () =>
+    requestJson<{
+      schemas: Array<{
+        doc_type: string;
+        display_name: string;
+        domains: string[];
+        description: string;
+        fields: unknown[];
+        yaml: string;
+      }>;
+    }>("/api/v1/schemas"),
+  generateSchemaFromFile: async (file: File, domain: string) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("domain", domain);
+    const res = await fetch("/api/v1/schemas/generate/from-file", {
+      method: "POST",
+      body: form,
+      credentials: "same-origin",
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`POST schemas/generate ${res.status}${body ? `: ${body}` : ""}`);
+    }
+    return (await res.json()) as {
+      proposal: Record<string, unknown>;
+      yaml: string;
+      ocr_text_preview: string;
+      raw_response: string;
+    };
+  },
+  updateSchemaYaml: (docType: string, yaml: string) =>
+    requestJson<Record<string, unknown>>(`/api/v1/schemas/${docType}/yaml`, {
+      method: "PUT",
+      body: JSON.stringify({ yaml }),
+    }),
 };
