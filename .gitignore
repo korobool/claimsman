@@ -189,3 +189,10 @@ apps/web/static/app/*
 # Claimsman runtime state
 /var/lib/claimsman/
 /tmp/claimsman*.log
+
+# Generated / temporary artifacts — never commit these
+docs/screenshots/
+docs/visual-runs/
+*.log.json
+coverage/
+.pytest_cache/
