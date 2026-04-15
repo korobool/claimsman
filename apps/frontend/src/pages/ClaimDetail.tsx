@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, type ClaimDetail, type ClaimPage } from "../lib/api";
 
@@ -6,32 +6,51 @@ export default function ClaimDetailPage() {
   const { claimId } = useParams<{ claimId: string }>();
   const [claim, setClaim] = useState<ClaimDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [selectedPage, setSelectedPage] = useState<ClaimPage | null>(null);
+  const [selectedPageId, setSelectedPageId] = useState<string | null>(null);
+  const claimRef = useRef<ClaimDetail | null>(null);
+  claimRef.current = claim;
 
   const load = useCallback(async () => {
     if (!claimId) return;
     try {
       const c = await api.getClaim(claimId);
       setClaim(c);
-      if (!selectedPage && c.documents.length > 0 && c.documents[0].pages.length > 0) {
-        setSelectedPage(c.documents[0].pages[0]);
-      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [claimId, selectedPage]);
+  }, [claimId]);
 
+  // Initial fetch + poll while the pipeline is still running.
   useEffect(() => {
     load();
-    // poll every 2s while still processing so new pages show up live
     const interval = setInterval(() => {
-      if (!claim || claim.status === "processing" || claim.status === "uploaded") {
+      const c = claimRef.current;
+      if (!c || c.status === "processing" || c.status === "uploaded") {
         load();
       }
     }, 2000);
     return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [claimId]);
+  }, [load]);
+
+  // Auto-select the first page the first time the claim loads a page.
+  useEffect(() => {
+    if (selectedPageId || !claim) return;
+    for (const doc of claim.documents) {
+      if (doc.pages.length > 0) {
+        setSelectedPageId(doc.pages[0].id);
+        return;
+      }
+    }
+  }, [claim, selectedPageId]);
+
+  const selectedPage = useMemo<ClaimPage | null>(() => {
+    if (!claim || !selectedPageId) return null;
+    for (const doc of claim.documents) {
+      const hit = doc.pages.find((p) => p.id === selectedPageId);
+      if (hit) return hit;
+    }
+    return null;
+  }, [claim, selectedPageId]);
 
   if (error) {
     return (
@@ -99,10 +118,11 @@ export default function ClaimDetailPage() {
                   <li key={page.id}>
                     <button
                       type="button"
-                      onClick={() => setSelectedPage(page)}
+                      onClick={() => setSelectedPageId(page.id)}
+                      aria-label={`${doc.display_name ?? "document"} page ${page.page_index + 1}`}
                       className={[
                         "flex w-full items-center justify-between rounded px-2 py-1 text-left text-xs",
-                        selectedPage?.id === page.id
+                        selectedPageId === page.id
                           ? "bg-accent/15 text-ink"
                           : "text-ink-dim hover:bg-bg-hover hover:text-ink",
                       ].join(" ")}
@@ -169,6 +189,7 @@ function PageViewer({ claimId, page }: { claimId: string; page: ClaimPage }) {
   }
   return (
     <img
+      key={page.id}
       alt={`Page ${page.page_index + 1}`}
       src={`/api/v1/claims/${claimId}/pages/${page.id}/image`}
       className="max-h-full max-w-full rounded-md border border-line bg-white shadow-lg"
