@@ -1,6 +1,7 @@
 import { NavLink, Route, Routes } from "react-router-dom";
 import Inbox from "./pages/Inbox";
 import NewClaim from "./pages/NewClaim";
+import ClaimDetail from "./pages/ClaimDetail";
 import Audit from "./pages/Audit";
 import Settings from "./pages/Settings";
 
@@ -43,6 +44,7 @@ export default function App() {
         <Routes>
           <Route index element={<Inbox />} />
           <Route path="new" element={<NewClaim />} />
+          <Route path="claims/:claimId" element={<ClaimDetail />} />
           <Route path="audit" element={<Audit />} />
           <Route path="settings" element={<Settings />} />
         </Routes>

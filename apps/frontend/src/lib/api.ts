@@ -28,15 +28,36 @@ export interface ClaimSummary {
   upload_count: number;
 }
 
+export interface ClaimUpload {
+  id: string;
+  claim_id: string;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  sha256: string;
+}
+
+export interface ClaimPage {
+  id: string;
+  page_index: number;
+  classification: string | null;
+  confidence: number | null;
+  has_image: boolean;
+  text_layer_used: boolean;
+  ocr_preview: string | null;
+}
+
+export interface ClaimDocument {
+  id: string;
+  doc_type: string;
+  display_name: string | null;
+  page_count: number;
+  pages: ClaimPage[];
+}
+
 export interface ClaimDetail extends ClaimSummary {
-  uploads: Array<{
-    id: string;
-    claim_id: string;
-    filename: string;
-    mime_type: string;
-    size_bytes: number;
-    sha256: string;
-  }>;
+  uploads: ClaimUpload[];
+  documents: ClaimDocument[];
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

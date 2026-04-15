@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   api,
   type ClaimSummary,
@@ -73,6 +73,7 @@ export default function Inbox() {
 }
 
 function ClaimsTable({ claims }: { claims: ClaimSummary[] }) {
+  const navigate = useNavigate();
   return (
     <table className="w-full border-collapse text-sm">
       <thead className="text-left text-xs uppercase tracking-wide text-ink-faint">
@@ -87,7 +88,11 @@ function ClaimsTable({ claims }: { claims: ClaimSummary[] }) {
       </thead>
       <tbody>
         {claims.map((c) => (
-          <tr key={c.id} className="hover:bg-bg-hover">
+          <tr
+            key={c.id}
+            onClick={() => navigate(`/claims/${c.id}`)}
+            className="cursor-pointer hover:bg-bg-hover"
+          >
             <td className="border-b border-line py-2 pr-4 font-mono text-xs text-ink-dim">
               {c.code}
             </td>
