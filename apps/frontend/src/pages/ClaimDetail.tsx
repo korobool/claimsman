@@ -13,6 +13,8 @@ import {
   type OcrLine,
 } from "../lib/api";
 
+type ViewerTool = "select" | "add_bbox" | "edit_text";
+
 export default function ClaimDetailPage() {
   const { claimId } = useParams<{ claimId: string }>();
   const [claim, setClaim] = useState<ClaimDetail | null>(null);
@@ -20,6 +22,7 @@ export default function ClaimDetailPage() {
   const [selectedPageId, setSelectedPageId] = useState<string | null>(null);
   const [showBoxes, setShowBoxes] = useState(true);
   const [hoveredLine, setHoveredLine] = useState<number | null>(null);
+  const [tool, setTool] = useState<ViewerTool>("select");
   const claimRef = useRef<ClaimDetail | null>(null);
   claimRef.current = claim;
 
@@ -108,6 +111,31 @@ export default function ClaimDetailPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 rounded-md border border-line p-0.5 text-[11px] font-medium">
+            {(["select", "add_bbox", "edit_text"] as ViewerTool[]).map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setTool(t)}
+                className={[
+                  "rounded px-2 py-1",
+                  tool === t
+                    ? "bg-accent/15 text-ink"
+                    : "text-ink-dim hover:bg-bg-hover hover:text-ink",
+                ].join(" ")}
+                aria-pressed={tool === t}
+                title={
+                  t === "select"
+                    ? "Select tool — hover lines to inspect"
+                    : t === "add_bbox"
+                      ? "Draw a new bounding box"
+                      : "Click a line to edit its text"
+                }
+              >
+                {t === "select" ? "Select" : t === "add_bbox" ? "Add BBox" : "Edit text"}
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             onClick={() => setShowBoxes((v) => !v)}
@@ -198,6 +226,9 @@ export default function ClaimDetailPage() {
                 showBoxes={showBoxes}
                 hoveredLine={hoveredLine}
                 onHoverLine={setHoveredLine}
+                tool={tool}
+                onBBoxAdded={load}
+                onLineEdited={load}
               />
             ) : (
               <EmptyViewer />
@@ -263,13 +294,41 @@ function PageViewer({
   showBoxes,
   hoveredLine,
   onHoverLine,
+  tool,
+  onBBoxAdded,
+  onLineEdited,
 }: {
   claimId: string;
   page: ClaimPage;
   showBoxes: boolean;
   hoveredLine: number | null;
   onHoverLine: (i: number | null) => void;
+  tool: ViewerTool;
+  onBBoxAdded: () => void;
+  onLineEdited: () => void;
 }) {
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
+  const [dragEnd, setDragEnd] = useState<{ x: number; y: number } | null>(null);
+  const [pendingBBox, setPendingBBox] = useState<
+    { x0: number; y0: number; x1: number; y1: number } | null
+  >(null);
+  const [pendingText, setPendingText] = useState("");
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [editingText, setEditingText] = useState("");
+
+  const toSvgPoint = useCallback((event: React.MouseEvent<SVGSVGElement>) => {
+    const svg = svgRef.current;
+    if (!svg) return { x: 0, y: 0 };
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return { x: 0, y: 0 };
+    const pt = svg.createSVGPoint();
+    pt.x = event.clientX;
+    pt.y = event.clientY;
+    const transformed = pt.matrixTransform(ctm.inverse());
+    return { x: transformed.x, y: transformed.y };
+  }, []);
+
   if (!page.has_image) {
     return (
       <div className="max-w-xl rounded-lg border border-line bg-bg-raised p-6 text-sm text-ink-dim">
@@ -285,12 +344,88 @@ function PageViewer({
   const nativeH = page.height ?? 1;
   const lines = page.ocr_lines ?? [];
 
-  // Use an inline-block wrapper whose bounding box is defined by the
-  // img alone (block + max-h/max-w). The SVG is absolutely positioned
-  // to fill the wrapper exactly, and its coordinate system is the
-  // native page pixel space; preserveAspectRatio="none" stretches that
-  // coordinate space to the wrapper's actual rendered size so the
-  // polygons align pixel-for-pixel with the scaled image.
+  const onDown = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (tool !== "add_bbox") return;
+    const p = toSvgPoint(e);
+    setDragStart(p);
+    setDragEnd(p);
+  };
+  const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (tool !== "add_bbox" || !dragStart) return;
+    setDragEnd(toSvgPoint(e));
+  };
+  const onUp = () => {
+    if (tool !== "add_bbox" || !dragStart || !dragEnd) {
+      setDragStart(null);
+      setDragEnd(null);
+      return;
+    }
+    const x0 = Math.max(0, Math.min(dragStart.x, dragEnd.x));
+    const x1 = Math.max(0, Math.max(dragStart.x, dragEnd.x));
+    const y0 = Math.max(0, Math.min(dragStart.y, dragEnd.y));
+    const y1 = Math.max(0, Math.max(dragStart.y, dragEnd.y));
+    setDragStart(null);
+    setDragEnd(null);
+    if (x1 - x0 < 6 || y1 - y0 < 6) return;
+    setPendingBBox({ x0, y0, x1, y1 });
+    setPendingText("");
+  };
+
+  const confirmBBox = async () => {
+    if (!pendingBBox) return;
+    const { x0, y0, x1, y1 } = pendingBBox;
+    try {
+      await api.addBBox(claimId, page.id, {
+        text: pendingText,
+        bbox: [x0, y0, x1, y1],
+        polygon: [
+          [x0, y0],
+          [x1, y0],
+          [x1, y1],
+          [x0, y1],
+        ],
+        confidence: 1.0,
+      });
+      setPendingBBox(null);
+      setPendingText("");
+      onBBoxAdded();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+  const cancelBBox = () => {
+    setPendingBBox(null);
+    setPendingText("");
+  };
+
+  const startEditLine = (i: number, currentText: string) => {
+    if (tool !== "edit_text") return;
+    setEditingIndex(i);
+    setEditingText(currentText);
+  };
+  const commitLineEdit = async () => {
+    if (editingIndex == null) return;
+    try {
+      await api.editOcrLine(claimId, page.id, editingIndex, editingText);
+      setEditingIndex(null);
+      setEditingText("");
+      onLineEdited();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+  const cancelLineEdit = () => {
+    setEditingIndex(null);
+    setEditingText("");
+  };
+
+  const cursor =
+    tool === "add_bbox"
+      ? "cursor-crosshair"
+      : tool === "edit_text"
+        ? "cursor-text"
+        : "cursor-default";
+
   return (
     <div className="relative inline-block">
       <img
@@ -300,28 +435,39 @@ function PageViewer({
         className="block max-h-[calc(100vh-180px)] max-w-full rounded-md border border-line bg-white shadow-lg"
         draggable={false}
       />
-      {showBoxes && lines.length > 0 && (
-        <svg
-          className="pointer-events-none absolute left-0 top-0 h-full w-full"
-          viewBox={`0 0 ${nativeW} ${nativeH}`}
-          preserveAspectRatio="none"
-        >
-          {lines.map((line, i) => {
+      <svg
+        ref={svgRef}
+        className={`absolute left-0 top-0 h-full w-full ${cursor}`}
+        viewBox={`0 0 ${nativeW} ${nativeH}`}
+        preserveAspectRatio="none"
+        onMouseDown={onDown}
+        onMouseMove={onMove}
+        onMouseUp={onUp}
+        onMouseLeave={() => {
+          if (dragStart) {
+            setDragStart(null);
+            setDragEnd(null);
+          }
+        }}
+      >
+        {showBoxes &&
+          lines.map((line, i) => {
             const points = polygonPoints(line);
             if (!points) return null;
             const color = confidenceStroke(line.confidence);
-            const highlighted = hoveredLine === i;
+            const highlighted = hoveredLine === i || editingIndex === i;
             return (
               <polygon
                 key={i}
                 points={points}
-                fill={highlighted ? `${color}33` : `${color}14`}
+                fill={highlighted ? `${color}44` : `${color}14`}
                 stroke={color}
-                strokeWidth={1.4}
+                strokeWidth={highlighted ? 2.2 : 1.4}
                 vectorEffect="non-scaling-stroke"
-                className="pointer-events-auto cursor-crosshair"
+                className={tool === "add_bbox" ? "pointer-events-none" : "pointer-events-auto"}
                 onMouseEnter={() => onHoverLine(i)}
                 onMouseLeave={() => onHoverLine(null)}
+                onClick={() => startEditLine(i, line.text)}
               >
                 <title>
                   {line.text} ({Math.round(line.confidence * 100)}%)
@@ -329,7 +475,88 @@ function PageViewer({
               </polygon>
             );
           })}
-        </svg>
+        {dragStart && dragEnd && (
+          <rect
+            x={Math.min(dragStart.x, dragEnd.x)}
+            y={Math.min(dragStart.y, dragEnd.y)}
+            width={Math.abs(dragEnd.x - dragStart.x)}
+            height={Math.abs(dragEnd.y - dragStart.y)}
+            fill="#6aa9ff22"
+            stroke="#6aa9ff"
+            strokeDasharray="4 4"
+            strokeWidth={2}
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
+      </svg>
+
+      {pendingBBox && (
+        <div className="absolute inset-x-0 bottom-2 flex justify-center">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              confirmBBox();
+            }}
+            className="flex items-center gap-2 rounded-md border border-accent/60 bg-bg-raised/95 px-3 py-2 shadow-lg"
+          >
+            <span className="text-[10px] uppercase tracking-wide text-ink-faint">New bbox</span>
+            <input
+              autoFocus
+              value={pendingText}
+              onChange={(e) => setPendingText(e.target.value)}
+              placeholder="Type the text inside the box…"
+              className="w-72 rounded border border-line bg-bg-base px-2 py-1 text-xs outline-none focus:border-accent"
+            />
+            <button
+              type="submit"
+              className="rounded bg-accent px-3 py-1 text-[11px] font-medium text-[#0b0d10] hover:bg-accent-strong"
+            >
+              Add
+            </button>
+            <button
+              type="button"
+              onClick={cancelBBox}
+              className="rounded border border-line px-3 py-1 text-[11px] text-ink-dim hover:text-ink"
+            >
+              Cancel
+            </button>
+          </form>
+        </div>
+      )}
+
+      {editingIndex != null && (
+        <div className="absolute inset-x-0 bottom-2 flex justify-center">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              commitLineEdit();
+            }}
+            className="flex items-center gap-2 rounded-md border border-severity-warn/60 bg-bg-raised/95 px-3 py-2 shadow-lg"
+          >
+            <span className="text-[10px] uppercase tracking-wide text-ink-faint">
+              Edit line #{editingIndex + 1}
+            </span>
+            <input
+              autoFocus
+              value={editingText}
+              onChange={(e) => setEditingText(e.target.value)}
+              className="w-96 rounded border border-line bg-bg-base px-2 py-1 text-xs outline-none focus:border-accent"
+            />
+            <button
+              type="submit"
+              className="rounded bg-accent px-3 py-1 text-[11px] font-medium text-[#0b0d10] hover:bg-accent-strong"
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              onClick={cancelLineEdit}
+              className="rounded border border-line px-3 py-1 text-[11px] text-ink-dim hover:text-ink"
+            >
+              Cancel
+            </button>
+          </form>
+        </div>
       )}
     </div>
   );
