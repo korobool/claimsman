@@ -23,10 +23,20 @@ from sqlalchemy.orm import selectinload
 from apps.web.config import settings
 from apps.web.db import SessionLocal
 from apps.web.logging_setup import logger
-from apps.web.models import Claim, ClaimStatus, Document, ExtractedField, Page, Upload
+from apps.web.models import (
+    Claim,
+    ClaimStatus,
+    Document,
+    ExtractedField,
+    Finding,
+    Page,
+    Severity,
+    Upload,
+)
 from packages.extract import get_extractor
 from packages.ingest import IngestedDocument, SourceKind, ingest_file
 from packages.ocr import OcrResult, get_ocr_engine
+from packages.schemas import get_domains
 from packages.vision import get_classifier
 
 
@@ -68,10 +78,12 @@ async def run_claim_pipeline(claim_id: uuid.UUID) -> None:
             await session.commit()
             await _stage_extract(session, claim)
             await session.commit()
+            await _stage_analyze(session, claim)
+            await session.commit()
             logger.info(
                 "pipeline.done",
                 claim_id=str(claim_id),
-                stages="ingest+ocr+classify+extract",
+                stages="ingest+ocr+classify+extract+analyze",
                 status=claim.status.value,
             )
     except Exception as exc:  # noqa: BLE001 — last-resort logger
@@ -370,6 +382,116 @@ async def _stage_extract(session: AsyncSession, claim: Claim) -> None:
             model=extraction.model,
             vision_used=extraction.vision_used,
         )
+
+
+async def _stage_analyze(session: AsyncSession, claim: Claim) -> None:
+    """Load the domain's rule module and run each rule against the
+    assembled extracted-fields view of the claim. Persist each returned
+    RuleFinding as a Finding row."""
+    import importlib
+
+    from config.domain_rules.common import ClaimContext, DocumentView, RuleFinding
+
+    # Clear previous findings for this claim so we get a fresh set each run.
+    existing = await session.execute(
+        select(Finding).where(Finding.claim_id == claim.id)
+    )
+    for f in existing.scalars().all():
+        await session.delete(f)
+
+    domains_reg = get_domains()
+    domain_pack = domains_reg.get(claim.domain)
+    if domain_pack is None:
+        logger.warning(
+            "pipeline.analyze.no_domain",
+            claim_id=str(claim.id),
+            domain=claim.domain,
+        )
+        return
+
+    module_name = domain_pack.rule_module or claim.domain
+    try:
+        module = importlib.import_module(f"config.domain_rules.{module_name}")
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "pipeline.analyze.module_import_error",
+            claim_id=str(claim.id),
+            module=module_name,
+            error=str(exc),
+        )
+        return
+
+    rules = getattr(module, "RULES", [])
+    if not rules:
+        logger.info("pipeline.analyze.no_rules", claim_id=str(claim.id), module=module_name)
+        return
+
+    # Build a flat {schema_key: value} dict per document.
+    doc_result = await session.execute(
+        select(Document)
+        .where(Document.claim_id == claim.id)
+        .options(selectinload(Document.extracted_fields))
+    )
+    docs_view: list[DocumentView] = []
+    for doc in doc_result.scalars().all():
+        flat = {ef.schema_key: ef.value_json for ef in doc.extracted_fields}
+        docs_view.append(
+            DocumentView(
+                id=str(doc.id),
+                doc_type=doc.doc_type or "unknown",
+                display_name=doc.display_name,
+                fields=flat,
+            )
+        )
+
+    ctx = ClaimContext(
+        claim_id=str(claim.id),
+        claim_code=claim.code,
+        domain=claim.domain,
+        claimant_name=claim.claimant_name,
+        policy_number=claim.policy_number,
+        documents=docs_view,
+        thresholds=domain_pack.thresholds or {},
+    )
+
+    count_by_severity: dict[str, int] = {"info": 0, "warning": 0, "error": 0}
+    for rule in rules:
+        try:
+            results: list[RuleFinding] = rule(ctx) or []
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "pipeline.analyze.rule_error",
+                claim_id=str(claim.id),
+                rule=getattr(rule, "__name__", "?"),
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            continue
+        for rf in results:
+            try:
+                severity = Severity(rf.severity)
+            except Exception:  # noqa: BLE001
+                severity = Severity.INFO
+            session.add(
+                Finding(
+                    claim_id=claim.id,
+                    severity=severity,
+                    code=rf.code,
+                    message=rf.message,
+                    refs_json=rf.refs or None,
+                )
+            )
+            count_by_severity[severity.value] = count_by_severity.get(severity.value, 0) + 1
+
+    logger.info(
+        "pipeline.analyze.done",
+        claim_id=str(claim.id),
+        domain=claim.domain,
+        module=module_name,
+        info=count_by_severity.get("info", 0),
+        warning=count_by_severity.get("warning", 0),
+        error=count_by_severity.get("error", 0),
+    )
 
 
 async def _load_claim_with_uploads(

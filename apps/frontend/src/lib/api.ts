@@ -77,9 +77,21 @@ export interface ClaimDocument {
   extracted_fields: ExtractedField[];
 }
 
+export interface Finding {
+  id: string;
+  claim_id: string;
+  severity: "info" | "warning" | "error";
+  code: string;
+  message: string;
+  refs: Record<string, unknown> | null;
+}
+
 export interface ClaimDetail extends ClaimSummary {
   uploads: ClaimUpload[];
   documents: ClaimDocument[];
+  findings: Finding[];
+  findings_by_severity: Record<"info" | "warning" | "error", Finding[]>;
+  findings_summary: { error: number; warning: number; info: number };
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

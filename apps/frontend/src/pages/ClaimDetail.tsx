@@ -6,6 +6,7 @@ import {
   type ClaimDocument,
   type ClaimPage,
   type ExtractedField,
+  type Finding,
   type OcrLine,
 } from "../lib/api";
 
@@ -195,6 +196,10 @@ export default function ClaimDetailPage() {
               <PageSummary page={selectedPage} onHoverLine={setHoveredLine} hoveredLine={hoveredLine} />
             )}
 
+            {claim.findings && claim.findings.length > 0 && (
+              <FindingsCard findings={claim.findings} summary={claim.findings_summary} />
+            )}
+
             {selectedDocument && selectedDocument.extracted_fields.length > 0 && (
               <ExtractedFieldsCard fields={selectedDocument.extracted_fields} docType={selectedDocument.doc_type} />
             )}
@@ -375,6 +380,64 @@ function PageSummary({
           )}
         </ul>
       )}
+    </div>
+  );
+}
+
+function FindingsCard({
+  findings,
+  summary,
+}: {
+  findings: Finding[];
+  summary: { error: number; warning: number; info: number };
+}) {
+  const order: Array<Finding["severity"]> = ["error", "warning", "info"];
+  return (
+    <div className="mb-6 rounded-md border border-line/60 bg-bg-base p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="text-xs uppercase tracking-wide text-ink-faint">Findings</div>
+        <div className="flex items-center gap-1 text-[10px] uppercase">
+          {summary.error > 0 && (
+            <span className="rounded-full bg-severity-error/15 px-2 py-0.5 font-semibold text-severity-error">
+              {summary.error} error
+            </span>
+          )}
+          {summary.warning > 0 && (
+            <span className="rounded-full bg-severity-warn/15 px-2 py-0.5 font-semibold text-severity-warn">
+              {summary.warning} warn
+            </span>
+          )}
+          {summary.info > 0 && (
+            <span className="rounded-full bg-severity-info/15 px-2 py-0.5 font-semibold text-severity-info">
+              {summary.info} info
+            </span>
+          )}
+        </div>
+      </div>
+      <ul className="space-y-2 text-xs">
+        {order
+          .flatMap((sev) => findings.filter((f) => f.severity === sev))
+          .map((f) => (
+            <li
+              key={f.id}
+              className={[
+                "rounded border-l-2 px-2 py-1.5",
+                f.severity === "error"
+                  ? "border-severity-error bg-severity-error/5"
+                  : f.severity === "warning"
+                    ? "border-severity-warn bg-severity-warn/5"
+                    : "border-severity-info bg-severity-info/5",
+              ].join(" ")}
+            >
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-[10px] uppercase text-ink-faint">
+                  {f.code}
+                </span>
+              </div>
+              <div className="mt-0.5 text-ink">{f.message}</div>
+            </li>
+          ))}
+      </ul>
     </div>
   );
 }

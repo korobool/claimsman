@@ -52,9 +52,19 @@ async def get_claim(
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> dict:
     claim = await _load_claim_full(session, claim_id)
+    findings_by_severity = {"error": [], "warning": [], "info": []}
+    for f in claim.findings:
+        findings_by_severity.setdefault(f.severity.value, []).append(f.to_dict())
     return {
         **claim.to_dict(),
         "uploads": [u.to_dict() for u in claim.uploads],
+        "findings": [f.to_dict() for f in claim.findings],
+        "findings_by_severity": findings_by_severity,
+        "findings_summary": {
+            "error": len(findings_by_severity.get("error", [])),
+            "warning": len(findings_by_severity.get("warning", [])),
+            "info": len(findings_by_severity.get("info", [])),
+        },
         "documents": [
             {
                 "id": str(d.id),
@@ -204,6 +214,7 @@ async def _load_claim_full(session: AsyncSession, claim_id: uuid.UUID) -> Claim:
             selectinload(Claim.uploads),
             selectinload(Claim.documents).selectinload(Document.pages),
             selectinload(Claim.documents).selectinload(Document.extracted_fields),
+            selectinload(Claim.findings),
         )
         .where(Claim.id == claim_id)
     )
