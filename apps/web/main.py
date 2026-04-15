@@ -11,6 +11,7 @@ from apps.web import __version__
 from apps.web.config import settings
 from apps.web.logging_setup import configure_logging, logger
 from apps.web.routers import (
+    audit,
     claims,
     dev,
     domains,
@@ -89,6 +90,7 @@ app.include_router(domains.router, prefix="/api/v1")
 app.include_router(schemas_router.router, prefix="/api/v1")
 app.include_router(llm.router, prefix="/api/v1")
 app.include_router(health_router.router, prefix="/api/v1")
+app.include_router(audit.router, prefix="/api/v1")
 app.include_router(dev.router, prefix="/api/v1")
 
 
