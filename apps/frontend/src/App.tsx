@@ -3,6 +3,7 @@ import Inbox from "./pages/Inbox";
 import NewClaim from "./pages/NewClaim";
 import ClaimDetail from "./pages/ClaimDetail";
 import Audit from "./pages/Audit";
+import Dev from "./pages/Dev";
 import Settings from "./pages/Settings";
 
 const navItems = [
@@ -10,6 +11,7 @@ const navItems = [
   { to: "/new", label: "New Claim" },
   { to: "/audit", label: "Audit" },
   { to: "/settings", label: "Settings" },
+  { to: "/dev", label: "Dev", badge: true },
 ];
 
 export default function App() {
@@ -28,14 +30,19 @@ export default function App() {
               end={item.end}
               className={({ isActive }) =>
                 [
-                  "rounded-md px-3 py-2 text-sm transition-colors",
+                  "flex items-center justify-between rounded-md px-3 py-2 text-sm transition-colors",
                   isActive
                     ? "bg-accent/15 text-ink"
                     : "text-ink-dim hover:bg-bg-hover hover:text-ink",
                 ].join(" ")
               }
             >
-              {item.label}
+              <span>{item.label}</span>
+              {item.badge && (
+                <span className="rounded-full bg-severity-ok/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-severity-ok">
+                  live
+                </span>
+              )}
             </NavLink>
           ))}
         </nav>
@@ -47,6 +54,7 @@ export default function App() {
           <Route path="claims/:claimId" element={<ClaimDetail />} />
           <Route path="audit" element={<Audit />} />
           <Route path="settings/*" element={<Settings />} />
+          <Route path="dev" element={<Dev />} />
         </Routes>
       </main>
     </div>

@@ -91,6 +91,58 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
+export interface DevState {
+  app: {
+    name: string;
+    version: string;
+    env: string;
+    port: number;
+    base_url: string;
+  };
+  milestone: {
+    id: string;
+    label: string;
+    phase: string;
+    description: string;
+    completed_milestones: string[];
+    next_milestones: string[];
+  };
+  git: {
+    head?: string;
+    branch?: string;
+    commits?: Array<{ sha: string; author: string; when: string; subject: string }>;
+    error?: string;
+  };
+  config: {
+    schemas: { count: number; doc_types: string[] };
+    domains: { count: number; codes: string[] };
+  };
+  db: {
+    claims: number;
+    uploads: number;
+    documents: number;
+    pages: number;
+    extracted_fields: number;
+  };
+  recent_claims: Array<{
+    id: string;
+    code: string;
+    title: string | null;
+    claimant_name: string | null;
+    domain: string;
+    status: string;
+    created_at: string | null;
+  }>;
+  ollama: {
+    reachable: boolean;
+    url: string;
+    default_model: string;
+    model_count?: number;
+    models_sample?: Array<{ name: string; size: number }>;
+    error?: string;
+  };
+}
+
 export interface Domain {
   code: string;
   display_name: string;
@@ -151,4 +203,5 @@ export const api = {
     }),
   deleteDomain: (code: string) =>
     requestJson<void>(`/api/v1/domains/${code}`, { method: "DELETE" }),
+  devState: () => requestJson<DevState>("/api/v1/dev/state"),
 };

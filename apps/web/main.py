@@ -10,7 +10,7 @@ from starlette.types import Scope
 from apps.web import __version__
 from apps.web.config import settings
 from apps.web.logging_setup import configure_logging, logger
-from apps.web.routers import claims, domains, system
+from apps.web.routers import claims, dev, domains, system
 
 STATIC_APP_DIR = Path(__file__).parent / "static" / "app"
 STATIC_APP_INDEX = STATIC_APP_DIR / "index.html"
@@ -78,6 +78,7 @@ app = FastAPI(
 app.include_router(system.router, prefix="/api/v1")
 app.include_router(claims.router, prefix="/api/v1")
 app.include_router(domains.router, prefix="/api/v1")
+app.include_router(dev.router, prefix="/api/v1")
 
 
 @app.get("/healthz")
