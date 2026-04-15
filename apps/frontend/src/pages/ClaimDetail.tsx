@@ -390,17 +390,112 @@ function PageViewer({
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editingText, setEditingText] = useState("");
 
-  const toSvgPoint = useCallback((event: React.MouseEvent<SVGSVGElement>) => {
+  // React's synthetic events don't seem to reach the SVG reliably on
+  // some Chrome + viewBox combinations (native addEventListener works
+  // fine but JSX onMouseDown doesn't fire). Attach the drag listeners
+  // directly to the SVG via a ref + useEffect so the behaviour mirrors
+  // the reference project's vanilla-JS addEventListener approach.
+  //
+  // Refs hold the latest state for the event closures so the handlers
+  // don't bind stale values.
+  const toolRef = useRef(tool);
+  toolRef.current = tool;
+  const dragStartRef = useRef<{ x: number; y: number } | null>(null);
+  const dragEndRef = useRef<{ x: number; y: number } | null>(null);
+  const busyRef = useRef(false);
+
+  useEffect(() => {
     const svg = svgRef.current;
-    if (!svg) return { x: 0, y: 0 };
-    const ctm = svg.getScreenCTM();
-    if (!ctm) return { x: 0, y: 0 };
-    const pt = svg.createSVGPoint();
-    pt.x = event.clientX;
-    pt.y = event.clientY;
-    const transformed = pt.matrixTransform(ctm.inverse());
-    return { x: transformed.x, y: transformed.y };
-  }, []);
+    if (!svg) return;
+
+    const toSvg = (clientX: number, clientY: number) => {
+      const ctm = svg.getScreenCTM();
+      if (!ctm) return { x: 0, y: 0 };
+      const pt = svg.createSVGPoint();
+      pt.x = clientX;
+      pt.y = clientY;
+      const t = pt.matrixTransform(ctm.inverse());
+      return { x: t.x, y: t.y };
+    };
+
+    const down = (e: MouseEvent) => {
+      if (toolRef.current !== "add_bbox") return;
+      e.preventDefault();
+      const p = toSvg(e.clientX, e.clientY);
+      dragStartRef.current = p;
+      dragEndRef.current = p;
+      setDragStart(p);
+      setDragEnd(p);
+    };
+    const move = (e: MouseEvent) => {
+      if (!dragStartRef.current) return;
+      const p = toSvg(e.clientX, e.clientY);
+      dragEndRef.current = p;
+      setDragEnd(p);
+    };
+    const up = async (_e: MouseEvent) => {
+      if (!dragStartRef.current || !dragEndRef.current) {
+        dragStartRef.current = null;
+        dragEndRef.current = null;
+        setDragStart(null);
+        setDragEnd(null);
+        return;
+      }
+      const s = dragStartRef.current;
+      const en = dragEndRef.current;
+      dragStartRef.current = null;
+      dragEndRef.current = null;
+      setDragStart(null);
+      setDragEnd(null);
+
+      const x0 = Math.max(0, Math.min(s.x, en.x));
+      const x1 = Math.max(0, Math.max(s.x, en.x));
+      const y0 = Math.max(0, Math.min(s.y, en.y));
+      const y1 = Math.max(0, Math.max(s.y, en.y));
+      if (x1 - x0 < 6 || y1 - y0 < 6) return;
+
+      if (busyRef.current) return;
+      busyRef.current = true;
+      setRecognizing({ x0, y0, x1, y1 });
+      setRecognizeError(null);
+      try {
+        await api.recognizeBBox(claimId, page.id, {
+          bbox: [x0, y0, x1, y1],
+          polygon: [
+            [x0, y0],
+            [x1, y0],
+            [x1, y1],
+            [x0, y1],
+          ],
+        });
+        onBBoxAdded();
+      } catch (err) {
+        setRecognizeError(err instanceof Error ? err.message : String(err));
+      } finally {
+        busyRef.current = false;
+        setRecognizing(null);
+      }
+    };
+    const leave = () => {
+      if (dragStartRef.current) {
+        dragStartRef.current = null;
+        dragEndRef.current = null;
+        setDragStart(null);
+        setDragEnd(null);
+      }
+    };
+
+    svg.addEventListener("mousedown", down);
+    svg.addEventListener("mousemove", move);
+    svg.addEventListener("mouseup", up);
+    svg.addEventListener("mouseleave", leave);
+    return () => {
+      svg.removeEventListener("mousedown", down);
+      svg.removeEventListener("mousemove", move);
+      svg.removeEventListener("mouseup", up);
+      svg.removeEventListener("mouseleave", leave);
+    };
+  }, [claimId, page.id, onBBoxAdded]);
 
   if (!page.has_image) {
     return (
@@ -416,55 +511,6 @@ function PageViewer({
   const nativeW = page.width ?? 1;
   const nativeH = page.height ?? 1;
   const lines = page.ocr_lines ?? [];
-
-  const onDown = (e: React.MouseEvent<SVGSVGElement>) => {
-    if (tool !== "add_bbox") return;
-    const p = toSvgPoint(e);
-    setDragStart(p);
-    setDragEnd(p);
-  };
-  const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
-    if (tool !== "add_bbox" || !dragStart) return;
-    setDragEnd(toSvgPoint(e));
-  };
-  const onUp = async () => {
-    if (tool !== "add_bbox" || !dragStart || !dragEnd) {
-      setDragStart(null);
-      setDragEnd(null);
-      return;
-    }
-    const x0 = Math.max(0, Math.min(dragStart.x, dragEnd.x));
-    const x1 = Math.max(0, Math.max(dragStart.x, dragEnd.x));
-    const y0 = Math.max(0, Math.min(dragStart.y, dragEnd.y));
-    const y1 = Math.max(0, Math.max(dragStart.y, dragEnd.y));
-    setDragStart(null);
-    setDragEnd(null);
-    if (x1 - x0 < 6 || y1 - y0 < 6) return;
-
-    // Auto-recognize with Surya on the user-drawn region. Drawing a
-    // manual box is an implicit signal that the auto-detector missed
-    // something; we hand Surya the exact rectangle so recognition is
-    // forced to the reviewer's selection. The reviewer can still use
-    // the "Edit text" tool afterwards to correct the result.
-    setRecognizing({ x0, y0, x1, y1 });
-    setRecognizeError(null);
-    try {
-      await api.recognizeBBox(claimId, page.id, {
-        bbox: [x0, y0, x1, y1],
-        polygon: [
-          [x0, y0],
-          [x1, y0],
-          [x1, y1],
-          [x0, y1],
-        ],
-      });
-      onBBoxAdded();
-    } catch (err) {
-      setRecognizeError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setRecognizing(null);
-    }
-  };
 
   const startEditLine = (i: number, currentText: string) => {
     if (tool !== "edit_text") return;
@@ -508,15 +554,6 @@ function PageViewer({
         className={`absolute left-0 top-0 h-full w-full ${cursor}`}
         viewBox={`0 0 ${nativeW} ${nativeH}`}
         preserveAspectRatio="none"
-        onMouseDown={onDown}
-        onMouseMove={onMove}
-        onMouseUp={onUp}
-        onMouseLeave={() => {
-          if (dragStart) {
-            setDragStart(null);
-            setDragEnd(null);
-          }
-        }}
       >
         {showBoxes &&
           lines.map((line, i) => {
