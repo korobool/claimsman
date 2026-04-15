@@ -223,7 +223,21 @@ def _run_ocr_on_path(image_path: Path) -> OcrResult:
 
 async def _stage_classify(session: AsyncSession, claim: Claim) -> None:
     """Run SigLIP 2 zero-shot classification on every page image, then
-    assign the Document.doc_type by majority vote."""
+    assign the Document.doc_type by majority vote. The label set is
+    filtered to the schemas that apply to the claim's active domain —
+    otherwise zero-shot picks wildly wrong cross-domain labels (e.g.
+    a Bulgarian pharmacy invoice scored as a repair_estimate because
+    both are tabular forms)."""
+    from packages.schemas import get_schemas as _get_schemas
+
+    domain_labels: list[str] = [
+        s.doc_type.replace("_", " ")
+        for s in _get_schemas().all()
+        if claim.domain in (s.domains or []) and s.doc_type != "unknown"
+    ]
+    if not domain_labels:
+        domain_labels = None  # type: ignore[assignment]
+
     result = await session.execute(
         select(Page)
         .join(Document)
@@ -242,7 +256,9 @@ async def _stage_classify(session: AsyncSession, claim: Claim) -> None:
         if not page.image_path:
             continue
         try:
-            classification = await asyncio.to_thread(_run_classify_on_path, Path(page.image_path))
+            classification = await asyncio.to_thread(
+                _run_classify_on_path, Path(page.image_path), domain_labels,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.error(
                 "pipeline.classify.error",
@@ -275,10 +291,10 @@ async def _stage_classify(session: AsyncSession, claim: Claim) -> None:
             doc.doc_type = winner
 
 
-def _run_classify_on_path(image_path: Path):
+def _run_classify_on_path(image_path: Path, labels: list[str] | None = None):
     classifier = get_classifier()
     with Image.open(image_path) as img:
-        return classifier.classify(img)
+        return classifier.classify(img, candidate_labels=labels)
 
 
 def _normalize_label(label: str) -> str:
