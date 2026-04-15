@@ -34,7 +34,15 @@ docker compose --env-file .env -f deploy/docker-compose.yml up -d postgres
 
 # 4. Python venv + deps
 if [ ! -d .venv ]; then
-  python3 -m venv .venv
+  # Ubuntu ships venv but sometimes strips ensurepip; create without pip and
+  # bootstrap pip via get-pip.py so we don't depend on the python3-venv apt
+  # package being installable on the host.
+  if ! python3 -m venv .venv 2>/dev/null; then
+    echo "[deploy] ensurepip missing; creating venv without pip and bootstrapping"
+    rm -rf .venv
+    python3 -m venv --without-pip .venv
+    curl -sSL https://bootstrap.pypa.io/get-pip.py | .venv/bin/python
+  fi
 fi
 # shellcheck disable=SC1091
 source .venv/bin/activate

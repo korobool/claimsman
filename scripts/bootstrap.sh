@@ -11,7 +11,12 @@ echo "[bootstrap] root=$ROOT"
 # 1. Python virtualenv + deps
 if [ ! -d .venv ]; then
   echo "[bootstrap] creating Python venv at .venv"
-  python3 -m venv .venv
+  if ! python3 -m venv .venv 2>/dev/null; then
+    echo "[bootstrap] ensurepip missing; falling back to --without-pip + get-pip.py"
+    rm -rf .venv
+    python3 -m venv --without-pip .venv
+    curl -sSL https://bootstrap.pypa.io/get-pip.py | .venv/bin/python
+  fi
 fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
