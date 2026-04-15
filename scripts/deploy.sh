@@ -49,7 +49,12 @@ source .venv/bin/activate
 pip install --upgrade pip >/dev/null
 pip install -r requirements.txt
 
-# 5. Frontend build
+# 5a. DB migrations
+echo "[deploy] running alembic migrations"
+set -a; source .env; set +a
+alembic upgrade head
+
+# 5b. Frontend build
 pushd apps/frontend >/dev/null
 if [ -f package-lock.json ]; then
   npm ci
