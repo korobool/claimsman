@@ -1,0 +1,35 @@
+doc_type: insurance_card
+display_name: Insurance card
+domains: [health_insurance, motor_insurance]
+description: >
+  A member identification card or insurance certificate showing the insurer,
+  policy number, member name, and effective period.
+fields:
+  - name: insurer_name
+    label: Insurer
+    type: text
+    required: true
+  - name: policy_number
+    label: Policy / member number
+    type: text
+    required: true
+  - name: member_name
+    label: Member name
+    type: person_name
+    required: true
+  - name: group_number
+    label: Group number / plan code
+    type: text
+    required: false
+  - name: effective_date
+    label: Effective date
+    type: date
+    required: false
+  - name: expiry_date
+    label: Expiry date
+    type: date
+    required: false
+  - name: plan_type
+    label: Plan type
+    type: text
+    required: false

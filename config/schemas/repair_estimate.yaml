@@ -1,0 +1,77 @@
+doc_type: repair_estimate
+display_name: Repair estimate
+domains: [motor_insurance]
+description: >
+  A body-shop repair estimate for a vehicle: shop details, the vehicle
+  identification, and itemized labor and parts with totals.
+fields:
+  - name: shop_name
+    label: Repair shop
+    type: text
+    required: true
+  - name: shop_address
+    label: Shop address
+    type: address
+    required: false
+  - name: estimate_number
+    label: Estimate number
+    type: text
+    required: false
+  - name: date
+    label: Estimate date
+    type: date
+    required: true
+  - name: vehicle
+    label: Vehicle
+    type: object
+    fields:
+      - name: vin
+        label: VIN
+        type: text
+      - name: make
+        label: Make
+        type: text
+      - name: model
+        label: Model
+        type: text
+      - name: year
+        label: Year
+        type: number
+      - name: plate
+        label: Plate
+        type: text
+      - name: mileage
+        label: Mileage
+        type: number
+  - name: labor_items
+    label: Labor items
+    type: list[object]
+    fields:
+      - name: description
+        type: text
+      - name: hours
+        type: number
+      - name: rate
+        type: currency
+      - name: total
+        type: currency
+  - name: parts_items
+    label: Parts items
+    type: list[object]
+    fields:
+      - name: description
+        type: text
+      - name: quantity
+        type: number
+      - name: unit_price
+        type: currency
+      - name: total
+        type: currency
+  - name: subtotal
+    type: currency
+  - name: tax
+    type: currency
+  - name: total
+    label: Grand total
+    type: currency
+    required: true

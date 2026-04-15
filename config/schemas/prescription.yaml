@@ -1,0 +1,65 @@
+doc_type: prescription
+display_name: Prescription
+domains: [health_insurance]
+description: >
+  A medical prescription issued by a doctor (handwritten or printed) that
+  authorizes one or more medications for a patient.
+fields:
+  - name: prescriber_name
+    label: Prescribing doctor
+    type: person_name
+    required: true
+  - name: prescriber_license
+    label: Doctor license / UIN
+    type: text
+    required: false
+  - name: patient_name
+    label: Patient name
+    type: person_name
+    required: true
+  - name: patient_dob
+    label: Patient date of birth
+    type: date
+    required: false
+  - name: issue_date
+    label: Prescription date
+    type: date
+    required: false
+  - name: diagnosis_codes
+    label: Diagnosis codes
+    type: list[text]
+    required: false
+    description: ICD-10 codes or free-text diagnoses.
+  - name: medications
+    label: Medications
+    type: list[object]
+    required: true
+    fields:
+      - name: drug
+        label: Drug name
+        type: text
+        required: true
+      - name: form
+        label: Form (tablet, capsule, injection, ...)
+        type: text
+      - name: dose
+        label: Single dose
+        type: text
+      - name: frequency
+        label: Frequency / sig
+        type: text
+      - name: quantity
+        label: Quantity prescribed
+        type: text
+      - name: refills
+        label: Refills
+        type: number
+llm_hints:
+  system_preamble: >
+    You are reading a medical prescription. Capture every prescribed
+    medication as a distinct row, preserve units (mg, mL, IU, tablet,
+    capsule), and keep doctor and patient names exactly as written.
+  few_shot: []
+validation:
+  - rule: medications_nonempty
+    message: A prescription must have at least one medication row.

@@ -37,6 +37,13 @@ export interface ClaimUpload {
   sha256: string;
 }
 
+export interface OcrLine {
+  text: string;
+  bbox: number[];
+  confidence: number;
+  polygon: number[][] | null;
+}
+
 export interface ClaimPage {
   id: string;
   page_index: number;
@@ -47,6 +54,18 @@ export interface ClaimPage {
   ocr_preview: string | null;
   ocr_text: string | null;
   line_count: number;
+  width: number | null;
+  height: number | null;
+  ocr_lines: OcrLine[] | null;
+}
+
+export interface ExtractedField {
+  id: string;
+  document_id: string;
+  schema_key: string;
+  value: unknown;
+  confidence: number | null;
+  llm_model: string | null;
 }
 
 export interface ClaimDocument {
@@ -55,6 +74,7 @@ export interface ClaimDocument {
   display_name: string | null;
   page_count: number;
   pages: ClaimPage[];
+  extracted_fields: ExtractedField[];
 }
 
 export interface ClaimDetail extends ClaimSummary {
@@ -68,6 +88,35 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const body = await res.text().catch(() => "");
     throw new Error(`${path} ${res.status}${body ? `: ${body}` : ""}`);
   }
+  return (await res.json()) as T;
+}
+
+export interface Domain {
+  code: string;
+  display_name: string;
+  description: string;
+  vocabulary: Record<string, unknown>;
+  required_documents: Array<Record<string, string[]>>;
+  rule_module: string;
+  decision_prompt_snippet: string;
+  thresholds: Record<string, unknown>;
+  yaml: string;
+}
+
+async function requestJson<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<T> {
+  const res = await fetch(path, {
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    ...init,
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`${init?.method ?? "GET"} ${path} ${res.status}${body ? `: ${body}` : ""}`);
+  }
+  if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
 
@@ -88,4 +137,18 @@ export const api = {
     }
     return (await res.json()) as ClaimDetail;
   },
+  listDomains: () => requestJson<{ domains: Domain[] }>("/api/v1/domains"),
+  getDomain: (code: string) => requestJson<Domain>(`/api/v1/domains/${code}`),
+  updateDomainYaml: (code: string, yaml: string) =>
+    requestJson<Domain>(`/api/v1/domains/${code}/yaml`, {
+      method: "PUT",
+      body: JSON.stringify({ yaml }),
+    }),
+  createDomain: (body: Partial<Domain>) =>
+    requestJson<Domain>("/api/v1/domains", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  deleteDomain: (code: string) =>
+    requestJson<void>(`/api/v1/domains/${code}`, { method: "DELETE" }),
 };

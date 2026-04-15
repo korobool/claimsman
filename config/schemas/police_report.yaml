@@ -1,0 +1,49 @@
+doc_type: police_report
+display_name: Police / incident report
+domains: [motor_insurance]
+description: >
+  An accident or incident report filed with the police. Records the parties,
+  vehicles, location, and a narrative describing the event.
+fields:
+  - name: case_number
+    type: text
+    required: true
+  - name: report_date
+    type: date
+    required: true
+  - name: incident_date
+    type: date
+    required: false
+  - name: location
+    type: address
+    required: false
+  - name: parties
+    type: list[object]
+    fields:
+      - name: name
+        type: person_name
+      - name: role
+        type: text
+        description: "driver, passenger, witness, pedestrian, ..."
+      - name: license_number
+        type: text
+  - name: vehicles
+    type: list[object]
+    fields:
+      - name: vin
+        type: text
+      - name: plate
+        type: text
+      - name: make
+        type: text
+      - name: model
+        type: text
+      - name: damage
+        type: text
+  - name: narrative
+    label: Narrative
+    type: text
+  - name: officer_name
+    type: person_name
+  - name: officer_badge
+    type: text

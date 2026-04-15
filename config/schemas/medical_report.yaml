@@ -1,0 +1,53 @@
+doc_type: medical_report
+display_name: Medical report
+domains: [health_insurance]
+description: >
+  A physician visit or diagnostic report (амбулаторен лист, consultation note)
+  that records a patient's chief complaint, examination findings, diagnoses,
+  and recommendations.
+fields:
+  - name: patient_name
+    label: Patient name
+    type: person_name
+    required: true
+  - name: patient_dob
+    label: Patient date of birth
+    type: date
+    required: false
+  - name: provider_name
+    label: Attending physician / clinic
+    type: text
+    required: true
+  - name: visit_date
+    label: Visit date
+    type: date
+    required: true
+  - name: chief_complaint
+    label: Chief complaint / reason for visit
+    type: text
+    required: false
+  - name: findings
+    label: Examination findings
+    type: text
+    required: false
+  - name: diagnoses
+    label: Diagnoses
+    type: list[object]
+    required: true
+    fields:
+      - name: code
+        label: ICD-10 code
+        type: text
+      - name: description
+        label: Diagnosis description
+        type: text
+        required: true
+  - name: recommendations
+    label: Recommendations / plan
+    type: text
+    required: false
+llm_hints:
+  system_preamble: >
+    Focus on diagnoses (ICD-10 codes) and the attending physician. If the
+    document is an outpatient sheet (амбулаторен лист), treat it as a medical
+    report.

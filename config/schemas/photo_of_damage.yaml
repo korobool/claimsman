@@ -1,0 +1,24 @@
+doc_type: photo_of_damage
+display_name: Photo of vehicle damage
+domains: [motor_insurance]
+description: >
+  A photograph of damaged vehicle bodywork. No structured extraction; the LLM
+  produces a short natural-language description of the visible damage and a
+  severity hint (minor / moderate / severe).
+fields:
+  - name: damage_description
+    label: Damage description
+    type: text
+    required: true
+  - name: severity
+    label: Severity
+    type: text
+    required: true
+    description: "minor | moderate | severe"
+  - name: visible_vehicle_parts
+    type: list[text]
+    description: "bumper, fender, hood, door, ..."
+llm_hints:
+  system_preamble: >
+    Describe only the visible damage; do not speculate about cause. Use one of
+    the three severity levels: minor, moderate, severe.

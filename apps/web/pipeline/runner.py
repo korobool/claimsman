@@ -23,7 +23,8 @@ from sqlalchemy.orm import selectinload
 from apps.web.config import settings
 from apps.web.db import SessionLocal
 from apps.web.logging_setup import logger
-from apps.web.models import Claim, ClaimStatus, Document, Page, Upload
+from apps.web.models import Claim, ClaimStatus, Document, ExtractedField, Page, Upload
+from packages.extract import get_extractor
 from packages.ingest import IngestedDocument, SourceKind, ingest_file
 from packages.ocr import OcrResult, get_ocr_engine
 from packages.vision import get_classifier
@@ -65,10 +66,12 @@ async def run_claim_pipeline(claim_id: uuid.UUID) -> None:
             await session.commit()
             await _stage_classify(session, claim)
             await session.commit()
+            await _stage_extract(session, claim)
+            await session.commit()
             logger.info(
                 "pipeline.done",
                 claim_id=str(claim_id),
-                stages="ingest+ocr+classify",
+                stages="ingest+ocr+classify+extract",
                 status=claim.status.value,
             )
     except Exception as exc:  # noqa: BLE001 — last-resort logger
@@ -282,6 +285,75 @@ def _normalize_label(label: str) -> str:
     """Turn "medical report" → "medical_report" so labels match the
     snake_case doc_type convention used in config/schemas/*.yaml."""
     return label.strip().lower().replace(" ", "_")
+
+
+async def _stage_extract(session: AsyncSession, claim: Claim) -> None:
+    """Run the LLM (Ollama Gemma 4) against each Document with the
+    schema that matches the Document.doc_type, persisting each returned
+    field as an ExtractedField row."""
+    result = await session.execute(
+        select(Document)
+        .where(Document.claim_id == claim.id)
+        .options(
+            selectinload(Document.pages),
+            selectinload(Document.extracted_fields),
+        )
+    )
+    documents = result.scalars().all()
+    extractor = get_extractor()
+
+    for doc in documents:
+        if doc.extracted_fields:
+            continue  # already extracted in a prior run
+        ocr_text = "\n".join(p.ocr_text or "" for p in sorted(doc.pages, key=lambda x: x.page_index) if p.ocr_text)
+        image_paths = [Path(p.image_path) for p in sorted(doc.pages, key=lambda x: x.page_index) if p.image_path]
+        try:
+            extraction = await extractor.extract(
+                doc_type=doc.doc_type or "unknown",
+                domain_code=claim.domain,
+                ocr_text=ocr_text,
+                image_paths=image_paths,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "pipeline.extract.error",
+                claim_id=str(claim.id),
+                document_id=str(doc.id),
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            continue
+
+        if extraction.error:
+            logger.error(
+                "pipeline.extract.error",
+                claim_id=str(claim.id),
+                document_id=str(doc.id),
+                error=extraction.error,
+            )
+            continue
+
+        for key, value in extraction.fields.items():
+            session.add(
+                ExtractedField(
+                    document_id=doc.id,
+                    schema_key=key,
+                    value_json=value,
+                    confidence=None,
+                    source_bbox_json=None,
+                    llm_model=extraction.model,
+                    llm_rationale=None,
+                )
+            )
+        logger.info(
+            "pipeline.extract.document",
+            claim_id=str(claim.id),
+            document_id=str(doc.id),
+            doc_type=doc.doc_type,
+            fields_count=len(extraction.fields),
+            model=extraction.model,
+            vision_used=extraction.vision_used,
+        )
 
 
 async def _load_claim_with_uploads(

@@ -1,0 +1,57 @@
+doc_type: repair_invoice
+display_name: Repair invoice
+domains: [motor_insurance]
+description: >
+  A finalized invoice from a body shop for completed repair work. Similar in
+  structure to a repair estimate but usually includes a payment status.
+fields:
+  - name: shop_name
+    type: text
+    required: true
+  - name: invoice_number
+    type: text
+    required: true
+  - name: date
+    type: date
+    required: true
+  - name: vehicle
+    type: object
+    fields:
+      - name: vin
+        type: text
+      - name: make
+        type: text
+      - name: model
+        type: text
+      - name: year
+        type: number
+      - name: plate
+        type: text
+  - name: labor_items
+    type: list[object]
+    fields:
+      - name: description
+        type: text
+      - name: hours
+        type: number
+      - name: total
+        type: currency
+  - name: parts_items
+    type: list[object]
+    fields:
+      - name: description
+        type: text
+      - name: quantity
+        type: number
+      - name: total
+        type: currency
+  - name: subtotal
+    type: currency
+  - name: tax
+    type: currency
+  - name: total
+    type: currency
+    required: true
+  - name: payment_status
+    label: Payment status
+    type: text

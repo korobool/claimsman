@@ -1,0 +1,28 @@
+doc_type: vehicle_registration
+display_name: Vehicle registration
+domains: [motor_insurance]
+description: >
+  A vehicle registration certificate showing the vehicle identification, the
+  registered owner, and the current registration validity.
+fields:
+  - name: vin
+    type: text
+    required: true
+  - name: plate
+    type: text
+    required: true
+  - name: make
+    type: text
+  - name: model
+    type: text
+  - name: year
+    type: number
+  - name: owner_name
+    type: person_name
+    required: true
+  - name: registration_date
+    type: date
+  - name: expiry_date
+    type: date
+  - name: jurisdiction
+    type: text

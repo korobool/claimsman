@@ -1,0 +1,50 @@
+code: health_insurance
+display_name: Health insurance
+description: >
+  Private and public health insurance claims. Covers outpatient visits,
+  prescriptions, hospital stays, and diagnostic procedures.
+vocabulary:
+  coding_systems:
+    - ICD-10
+    - CPT
+    - NDC
+  common_abbreviations:
+    - BP
+    - HR
+    - Rx
+    - Dx
+    - Hx
+    - SOB
+  units:
+    - mg
+    - mcg
+    - mL
+    - IU
+    - tablet
+    - capsule
+    - injection
+  multilingual_hints: >
+    Documents may be in Bulgarian (Cyrillic). Common terms: ЕПИКРИЗА
+    (discharge summary), АМБУЛАТОРЕН ЛИСТ (outpatient sheet),
+    РЕЦЕПТУРНА БЛАНКА (prescription form), КАСОВ БОН (cash receipt),
+    ФАКТУРА (invoice), ДДС (VAT).
+required_documents:
+  - any_of:
+      - prescription
+      - medical_report
+      - discharge_summary
+  - any_of:
+      - receipt
+      - invoice
+  - any_of:
+      - insurance_card
+      - correspondence
+rule_module: health_insurance
+decision_prompt_snippet: >
+  You are a claims adjudicator reviewing a health insurance claim.
+  Weigh medical necessity, policy coverage, exclusions, deductible,
+  and copay. Cite specific findings and documents in the rationale.
+thresholds:
+  low_confidence: 0.80
+  name_levenshtein_max: 2
+  amount_tolerance: 0.02

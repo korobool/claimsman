@@ -1,0 +1,71 @@
+doc_type: receipt
+display_name: Receipt
+domains: [health_insurance, motor_insurance]
+description: >
+  A point-of-sale receipt or "cash receipt" (касов бон) confirming a payment
+  for goods or services. Usually has a list of line items, subtotal, tax (VAT/ДДС),
+  and total.
+fields:
+  - name: provider_name
+    label: Provider / merchant name
+    type: text
+    required: true
+  - name: provider_address
+    label: Provider address
+    type: address
+    required: false
+  - name: receipt_number
+    label: Receipt number
+    type: text
+    required: false
+  - name: issue_date
+    label: Date of issue
+    type: date
+    required: true
+  - name: line_items
+    label: Line items
+    type: list[object]
+    required: true
+    fields:
+      - name: description
+        label: Description
+        type: text
+        required: true
+      - name: quantity
+        label: Quantity
+        type: number
+      - name: unit_price
+        label: Unit price
+        type: currency
+      - name: total
+        label: Line total
+        type: currency
+  - name: subtotal
+    label: Subtotal
+    type: currency
+    required: false
+  - name: tax
+    label: Tax / VAT / ДДС
+    type: currency
+    required: false
+  - name: total
+    label: Grand total
+    type: currency
+    required: true
+  - name: currency
+    label: Currency
+    type: text
+    required: true
+  - name: payment_method
+    label: Payment method
+    type: text
+    required: false
+llm_hints:
+  system_preamble: >
+    Extract every line item as a distinct row. Keep the total in the original
+    currency exactly as printed; do not convert. Tax on Bulgarian receipts is
+    labelled "ДДС".
+validation:
+  - rule: sum_matches_total
+    message: Sum of line_items.total should equal subtotal + tax (±2%).
+    tolerance: 0.02

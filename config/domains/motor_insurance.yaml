@@ -1,0 +1,47 @@
+code: motor_insurance
+display_name: Motor insurance
+description: >
+  Auto / motor insurance claims. Covers collision, comprehensive,
+  third-party liability, and repair settlements.
+vocabulary:
+  coding_systems:
+    - ISO VIN
+  body_parts:
+    - bumper
+    - fender
+    - quarter panel
+    - A-pillar
+    - B-pillar
+    - hood
+    - door
+    - trunk
+    - headlight
+    - taillight
+  operation_codes:
+    - R&I
+    - R&R
+    - refinish
+    - blend
+    - paint
+required_documents:
+  - any_of:
+      - police_report
+      - correspondence
+  - any_of:
+      - repair_estimate
+      - repair_invoice
+  - any_of:
+      - driver_license
+  - any_of:
+      - insurance_card
+      - vehicle_registration
+rule_module: motor_insurance
+decision_prompt_snippet: >
+  You are a claims adjudicator reviewing an auto insurance claim.
+  Weigh liability, at-fault determination, prior claims, deductible,
+  coverage limits, and betterment. Cite specific findings and documents
+  in the rationale.
+thresholds:
+  low_confidence: 0.80
+  name_levenshtein_max: 2
+  amount_tolerance: 0.05

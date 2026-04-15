@@ -1,0 +1,74 @@
+doc_type: invoice
+display_name: Invoice
+domains: [health_insurance, motor_insurance]
+description: >
+  An itemized invoice (фактура) from a healthcare provider, pharmacy, repair shop,
+  or other vendor. Distinct from a receipt: an invoice is a request for payment,
+  a receipt is proof of payment.
+fields:
+  - name: issuer_name
+    label: Issuer / seller
+    type: text
+    required: true
+  - name: issuer_tax_id
+    label: Issuer tax ID / VAT number / ЕИК / ДДС
+    type: text
+    required: false
+  - name: bill_to_name
+    label: Bill-to party
+    type: text
+    required: true
+  - name: invoice_number
+    label: Invoice number
+    type: text
+    required: true
+  - name: issue_date
+    label: Issue date
+    type: date
+    required: true
+  - name: due_date
+    label: Due date
+    type: date
+    required: false
+  - name: line_items
+    label: Line items
+    type: list[object]
+    required: true
+    fields:
+      - name: description
+        label: Description
+        type: text
+        required: true
+      - name: quantity
+        label: Quantity
+        type: number
+      - name: unit_price
+        label: Unit price
+        type: currency
+      - name: total
+        label: Line total
+        type: currency
+  - name: subtotal
+    label: Subtotal
+    type: currency
+    required: false
+  - name: tax
+    label: Tax / VAT
+    type: currency
+    required: false
+  - name: total
+    label: Grand total
+    type: currency
+    required: true
+  - name: currency
+    label: Currency
+    type: text
+    required: true
+llm_hints:
+  system_preamble: >
+    Extract every line item as a distinct row. Keep amounts exactly as printed,
+    in the original currency. Bulgarian invoices label tax as "ДДС" and may
+    include both EUR and BGN totals.
+validation:
+  - rule: sum_matches_total
+    tolerance: 0.02

@@ -46,7 +46,7 @@ export default function App() {
           <Route path="new" element={<NewClaim />} />
           <Route path="claims/:claimId" element={<ClaimDetail />} />
           <Route path="audit" element={<Audit />} />
-          <Route path="settings" element={<Settings />} />
+          <Route path="settings/*" element={<Settings />} />
         </Routes>
       </main>
     </div>

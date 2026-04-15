@@ -1,0 +1,25 @@
+doc_type: correspondence
+display_name: Correspondence
+domains: [health_insurance, motor_insurance]
+description: >
+  A letter, email, or free-form written communication between the claimant,
+  the insurer, or a third party that cannot be classified into any other
+  schema. Includes forms like "Искане за възстановяване на разходи"
+  (reimbursement request forms).
+fields:
+  - name: author
+    label: Author / sender
+    type: text
+  - name: recipient
+    label: Recipient / addressee
+    type: text
+  - name: date
+    label: Date
+    type: date
+  - name: subject
+    label: Subject
+    type: text
+  - name: body_summary
+    label: Body summary
+    type: text
+    required: true

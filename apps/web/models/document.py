@@ -9,6 +9,7 @@ from apps.web.models.base import Base, TimestampMixin, UUIDPKMixin
 
 if TYPE_CHECKING:
     from apps.web.models.claim import Claim
+    from apps.web.models.extracted_field import ExtractedField
     from apps.web.models.page import Page
 
 
@@ -26,6 +27,11 @@ class Document(Base, UUIDPKMixin, TimestampMixin):
 
     claim: Mapped["Claim"] = relationship(back_populates="documents")
     pages: Mapped[list["Page"]] = relationship(
+        back_populates="document",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    extracted_fields: Mapped[list["ExtractedField"]] = relationship(
         back_populates="document",
         cascade="all, delete-orphan",
         lazy="selectin",

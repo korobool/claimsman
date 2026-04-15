@@ -1,0 +1,60 @@
+doc_type: discharge_summary
+display_name: Discharge summary
+domains: [health_insurance]
+description: >
+  A hospital discharge summary (епикриза) covering admission/discharge dates,
+  attending physician, final diagnoses, procedures performed, and medications
+  on discharge.
+fields:
+  - name: patient_name
+    label: Patient name
+    type: person_name
+    required: true
+  - name: patient_dob
+    label: Patient date of birth
+    type: date
+    required: false
+  - name: admission_date
+    label: Admission date
+    type: date
+    required: true
+  - name: discharge_date
+    label: Discharge date
+    type: date
+    required: true
+  - name: attending_physician
+    label: Attending physician
+    type: text
+    required: false
+  - name: facility
+    label: Hospital / facility
+    type: text
+    required: false
+  - name: diagnoses
+    label: Diagnoses
+    type: list[object]
+    required: true
+    fields:
+      - name: code
+        label: ICD-10 code
+        type: text
+      - name: description
+        label: Description
+        type: text
+  - name: procedures
+    label: Procedures / interventions
+    type: list[text]
+    required: false
+  - name: medications_on_discharge
+    label: Medications on discharge
+    type: list[text]
+    required: false
+  - name: follow_up
+    label: Follow-up instructions
+    type: text
+    required: false
+llm_hints:
+  system_preamble: >
+    Pay special attention to admission and discharge dates, and to the final
+    diagnosis (Окончателна диагноза). Capture every procedure code and every
+    discharge medication.

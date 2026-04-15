@@ -1,0 +1,27 @@
+doc_type: driver_license
+display_name: Driver license
+domains: [motor_insurance]
+description: >
+  A driver's license or equivalent state-issued driving credential.
+fields:
+  - name: full_name
+    type: person_name
+    required: true
+  - name: license_number
+    type: text
+    required: true
+  - name: dob
+    label: Date of birth
+    type: date
+  - name: issue_date
+    type: date
+  - name: expiry_date
+    type: date
+  - name: class
+    label: License class / category
+    type: text
+  - name: jurisdiction
+    label: Issuing authority / country
+    type: text
+  - name: address
+    type: address

@@ -1,0 +1,16 @@
+doc_type: unknown
+display_name: Unknown
+domains: [health_insurance, motor_insurance]
+description: >
+  Fallback schema when classification is not confident enough to pick a real
+  doc_type. The LLM is asked to write a short summary and propose a better
+  doc_type for the reviewer.
+fields:
+  - name: summary
+    label: One-paragraph summary
+    type: text
+    required: true
+  - name: suggested_doc_type
+    label: Suggested doc_type
+    type: text
+    required: false

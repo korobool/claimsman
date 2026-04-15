@@ -76,9 +76,13 @@ async def get_claim(
                             if isinstance(p.bbox_json, dict)
                             else 0
                         ),
+                        "width": (p.bbox_json or {}).get("width") if isinstance(p.bbox_json, dict) else None,
+                        "height": (p.bbox_json or {}).get("height") if isinstance(p.bbox_json, dict) else None,
+                        "ocr_lines": (p.bbox_json or {}).get("lines") if isinstance(p.bbox_json, dict) else None,
                     }
                     for p in sorted(d.pages, key=lambda x: x.page_index)
                 ],
+                "extracted_fields": [ef.to_dict() for ef in d.extracted_fields],
             }
             for d in claim.documents
         ],
@@ -199,6 +203,7 @@ async def _load_claim_full(session: AsyncSession, claim_id: uuid.UUID) -> Claim:
         .options(
             selectinload(Claim.uploads),
             selectinload(Claim.documents).selectinload(Document.pages),
+            selectinload(Claim.documents).selectinload(Document.extracted_fields),
         )
         .where(Claim.id == claim_id)
     )
