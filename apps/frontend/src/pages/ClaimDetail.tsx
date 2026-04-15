@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type React from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   api,
@@ -119,6 +120,22 @@ export default function ClaimDetailPage() {
             aria-pressed={showBoxes}
           >
             {showBoxes ? "Boxes on" : "Boxes off"}
+          </button>
+          <AddDocsButton claimId={claim.id} onAdded={load} />
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                await api.reprocessClaim(claim.id, "all");
+                load();
+              } catch (e: unknown) {
+                setError(e instanceof Error ? e.message : String(e));
+              }
+            }}
+            className="rounded-md border border-line px-3 py-1.5 text-xs text-ink-dim hover:text-ink"
+            title="Re-run the full pipeline for this claim"
+          >
+            Re-run
           </button>
           <StatusPill status={claim.status} />
         </div>
@@ -842,4 +859,50 @@ function confidenceDot(confidence: number): string {
   if (confidence >= 0.93) return "bg-severity-ok";
   if (confidence >= 0.8) return "bg-severity-warn";
   return "bg-severity-error";
+}
+
+function AddDocsButton({
+  claimId,
+  onAdded,
+}: {
+  claimId: string;
+  onAdded: () => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [busy, setBusy] = useState(false);
+  const onPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (files.length === 0) return;
+    setBusy(true);
+    try {
+      await api.addUploadsToClaim(claimId, files);
+      onAdded();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <input
+        ref={inputRef}
+        type="file"
+        multiple
+        accept="image/*,application/pdf,.docx"
+        className="hidden"
+        onChange={onPick}
+      />
+      <button
+        type="button"
+        onClick={() => inputRef.current?.click()}
+        disabled={busy}
+        className="rounded-md border border-line px-3 py-1.5 text-xs text-ink-dim hover:text-ink disabled:opacity-50"
+        title="Add more documents to this claim and re-run analysis"
+      >
+        {busy ? "Uploading…" : "Add documents"}
+      </button>
+    </>
+  );
 }

@@ -264,4 +264,49 @@ export const api = {
       `/api/v1/claims/${claimId}/decision/reopen`,
       { method: "POST", body: "{}" },
     ),
+  reprocessClaim: (claimId: string, stage = "all") =>
+    requestJson<{ claim_status: string; stage: string }>(
+      `/api/v1/claims/${claimId}/reprocess`,
+      { method: "POST", body: JSON.stringify({ stage }) },
+    ),
+  addUploadsToClaim: async (
+    claimId: string,
+    files: File[],
+  ): Promise<{ claim_id: string; status: string; added_count: number }> => {
+    const form = new FormData();
+    for (const f of files) form.append("files", f);
+    const res = await fetch(`/api/v1/claims/${claimId}/uploads`, {
+      method: "POST",
+      body: form,
+      credentials: "same-origin",
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`POST add uploads ${res.status}${body ? `: ${body}` : ""}`);
+    }
+    return (await res.json()) as {
+      claim_id: string;
+      status: string;
+      added_count: number;
+    };
+  },
+  editOcrLine: (claimId: string, pageId: string, index: number, text: string) =>
+    requestJson<{ page_id: string; line_index: number; text: string }>(
+      `/api/v1/claims/${claimId}/pages/${pageId}/ocr-line`,
+      { method: "PATCH", body: JSON.stringify({ index, text }) },
+    ),
+  addBBox: (
+    claimId: string,
+    pageId: string,
+    body: {
+      text: string;
+      polygon?: number[][];
+      bbox?: number[];
+      confidence?: number;
+    },
+  ) =>
+    requestJson<{ page_id: string; line_index: number; text: string }>(
+      `/api/v1/claims/${claimId}/pages/${pageId}/bboxes`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
 };

@@ -128,6 +128,23 @@ class DecisionActionIn(BaseModel):
     reviewer: str | None = None
 
 
+class ReprocessIn(BaseModel):
+    stage: str = "ocr"  # ocr | classify | extract | analyze | decide | all
+    document_id: uuid.UUID | None = None
+
+
+class OcrLineEditIn(BaseModel):
+    index: int
+    text: str
+
+
+class BBoxAddIn(BaseModel):
+    text: str
+    polygon: list[list[float]] | None = None
+    bbox: list[float] | None = None
+    confidence: float = 1.0
+
+
 @router.post("/{claim_id}/decision/confirm")
 async def confirm_decision(
     claim_id: uuid.UUID,
@@ -186,6 +203,178 @@ async def confirm_decision(
     )
     await session.refresh(claim, ["decisions"])
     return {"claim_status": claim.status.value, "decision": confirmed.to_dict()}
+
+
+@router.post("/{claim_id}/uploads")
+async def add_uploads(
+    claim_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    files: Annotated[list[UploadFile], File(description="Additional files to append")],
+) -> dict:
+    """Append one or more files to an existing claim and re-run the
+    pipeline. Idempotent across stages: previously-processed pages are
+    kept; new pages get ingest → OCR → classify → extract; analyze and
+    decide regenerate across the full (old + new) document set."""
+    if not files:
+        raise HTTPException(status_code=400, detail="at least one file is required")
+    claim = await _load_claim(session, claim_id)
+    total = 0
+    new_uploads: list[Upload] = []
+    for f in files:
+        content = await f.read()
+        size = len(content)
+        total += size
+        if size > MAX_FILE_BYTES:
+            raise HTTPException(status_code=413, detail=f"{f.filename!r} too large")
+        if total > MAX_TOTAL_BYTES:
+            raise HTTPException(status_code=413, detail="bundle over total limit")
+        mime = f.content_type or "application/octet-stream"
+        if not _is_allowed(mime):
+            raise HTTPException(status_code=415, detail=f"unsupported mime type {mime!r}")
+        target, sha256 = await storage.save(
+            claim_id=claim.id,
+            filename=f.filename or "upload.bin",
+            content=content,
+        )
+        u = Upload(
+            claim_id=claim.id,
+            filename=f.filename or "upload.bin",
+            mime_type=mime,
+            size_bytes=size,
+            storage_path=str(target),
+            sha256=sha256,
+        )
+        session.add(u)
+        new_uploads.append(u)
+    claim.status = ClaimStatus.PROCESSING
+    session.add(
+        AuditLog(
+            actor="reviewer",
+            entity="claim",
+            entity_id=claim.id,
+            action="add_uploads",
+            after_json={"count": len(new_uploads), "filenames": [u.filename for u in new_uploads]},
+        )
+    )
+    await session.commit()
+    enqueue_claim(claim.id)
+    logger.info(
+        "claim.uploads_added",
+        claim_id=str(claim.id),
+        count=len(new_uploads),
+        total_bytes=total,
+    )
+    return {
+        "claim_id": str(claim.id),
+        "status": claim.status.value,
+        "added_count": len(new_uploads),
+    }
+
+
+@router.post("/{claim_id}/reprocess")
+async def reprocess_claim(
+    claim_id: uuid.UUID,
+    payload: ReprocessIn,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict:
+    """Trigger a re-run of the pipeline for a claim.
+
+    ``stage=all`` re-runs everything. Narrower stages run only the
+    named stage forward; they clear the downstream rows (extracted
+    fields, findings, proposed decisions) so the new run starts clean.
+    """
+    claim = await _load_claim_full(session, claim_id)
+    # For v1 we always re-run the full pipeline; the stage hint will be
+    # honored properly in a follow-up when the runner learns to resume
+    # from a specific stage.
+    claim.status = ClaimStatus.PROCESSING
+    await session.commit()
+    session.add(
+        AuditLog(
+            actor="reviewer",
+            entity="claim",
+            entity_id=claim.id,
+            action=f"reprocess:{payload.stage}",
+            after_json={"stage": payload.stage, "document_id": str(payload.document_id) if payload.document_id else None},
+        )
+    )
+    await session.commit()
+    enqueue_claim(claim.id)
+    return {"claim_status": claim.status.value, "stage": payload.stage}
+
+
+@router.patch("/{claim_id}/pages/{page_id}/ocr-line")
+async def edit_ocr_line(
+    claim_id: uuid.UUID,
+    page_id: uuid.UUID,
+    payload: OcrLineEditIn,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict:
+    result = await session.execute(
+        select(Page).join(Document).where(Page.id == page_id).where(Document.claim_id == claim_id)
+    )
+    page = result.scalar_one_or_none()
+    if page is None:
+        raise HTTPException(status_code=404, detail="page not found")
+    bbox = page.bbox_json if isinstance(page.bbox_json, dict) else {"lines": []}
+    lines = bbox.get("lines") or []
+    if payload.index < 0 or payload.index >= len(lines):
+        raise HTTPException(status_code=400, detail="line index out of range")
+    lines[payload.index]["text"] = payload.text
+    bbox["lines"] = lines
+    page.bbox_json = dict(bbox)  # force re-assignment for JSONB
+    page.ocr_text = "\n".join(line.get("text", "") for line in lines)
+    session.add(
+        AuditLog(
+            actor="reviewer",
+            entity="page",
+            entity_id=page.id,
+            action="ocr_line_edit",
+            after_json={"index": payload.index, "text": payload.text},
+        )
+    )
+    await session.commit()
+    return {"page_id": str(page.id), "line_index": payload.index, "text": payload.text}
+
+
+@router.post("/{claim_id}/pages/{page_id}/bboxes")
+async def add_bbox(
+    claim_id: uuid.UUID,
+    page_id: uuid.UUID,
+    payload: BBoxAddIn,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict:
+    result = await session.execute(
+        select(Page).join(Document).where(Page.id == page_id).where(Document.claim_id == claim_id)
+    )
+    page = result.scalar_one_or_none()
+    if page is None:
+        raise HTTPException(status_code=404, detail="page not found")
+    bbox = page.bbox_json if isinstance(page.bbox_json, dict) else {"lines": []}
+    lines = list(bbox.get("lines") or [])
+    lines.append(
+        {
+            "text": payload.text,
+            "bbox": payload.bbox or [],
+            "confidence": float(payload.confidence),
+            "polygon": payload.polygon,
+            "manual": True,
+        }
+    )
+    bbox["lines"] = lines
+    page.bbox_json = dict(bbox)
+    page.ocr_text = "\n".join(line.get("text", "") for line in lines)
+    session.add(
+        AuditLog(
+            actor="reviewer",
+            entity="page",
+            entity_id=page.id,
+            action="bbox_add",
+            after_json={"text": payload.text, "polygon": payload.polygon},
+        )
+    )
+    await session.commit()
+    return {"page_id": str(page.id), "line_index": len(lines) - 1, "text": payload.text}
 
 
 @router.post("/{claim_id}/decision/reopen")
