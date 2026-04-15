@@ -270,35 +270,6 @@ function PageViewer({
   hoveredLine: number | null;
   onHoverLine: (i: number | null) => void;
 }) {
-  const imgRef = useRef<HTMLImageElement | null>(null);
-  const [rendered, setRendered] = useState<{ width: number; height: number } | null>(
-    null,
-  );
-
-  useEffect(() => {
-    // Reset measurement when the selected page changes so the overlay
-    // never shows at the previous page's dimensions.
-    setRendered(null);
-  }, [page.id]);
-
-  useEffect(() => {
-    const img = imgRef.current;
-    if (!img) return;
-    const update = () => {
-      if (img.clientWidth > 0 && img.clientHeight > 0) {
-        setRendered({ width: img.clientWidth, height: img.clientHeight });
-      }
-    };
-    if (img.complete) update();
-    const observer = new ResizeObserver(update);
-    observer.observe(img);
-    img.addEventListener("load", update);
-    return () => {
-      observer.disconnect();
-      img.removeEventListener("load", update);
-    };
-  }, [page.id]);
-
   if (!page.has_image) {
     return (
       <div className="max-w-xl rounded-lg border border-line bg-bg-raised p-6 text-sm text-ink-dim">
@@ -314,28 +285,24 @@ function PageViewer({
   const nativeH = page.height ?? 1;
   const lines = page.ocr_lines ?? [];
 
-  // Wrapper is sized exactly to the rendered img (in CSS pixels). The
-  // SVG then uses an absolute overlay at the same size, and its
-  // coordinate system uses the native page pixels via viewBox so the
-  // polygons map 1:1 onto the scaled image.
-  const wrapperStyle: React.CSSProperties = rendered
-    ? { width: rendered.width, height: rendered.height }
-    : {};
-
+  // Use an inline-block wrapper whose bounding box is defined by the
+  // img alone (block + max-h/max-w). The SVG is absolutely positioned
+  // to fill the wrapper exactly, and its coordinate system is the
+  // native page pixel space; preserveAspectRatio="none" stretches that
+  // coordinate space to the wrapper's actual rendered size so the
+  // polygons align pixel-for-pixel with the scaled image.
   return (
-    <div className="relative" style={wrapperStyle}>
+    <div className="relative inline-block">
       <img
-        ref={imgRef}
         key={page.id}
         alt={`Page ${page.page_index + 1}`}
         src={`/api/v1/claims/${claimId}/pages/${page.id}/image`}
         className="block max-h-[calc(100vh-180px)] max-w-full rounded-md border border-line bg-white shadow-lg"
+        draggable={false}
       />
-      {showBoxes && lines.length > 0 && rendered && (
+      {showBoxes && lines.length > 0 && (
         <svg
-          className="pointer-events-none absolute left-0 top-0"
-          width={rendered.width}
-          height={rendered.height}
+          className="pointer-events-none absolute left-0 top-0 h-full w-full"
           viewBox={`0 0 ${nativeW} ${nativeH}`}
           preserveAspectRatio="none"
         >
@@ -350,7 +317,7 @@ function PageViewer({
                 points={points}
                 fill={highlighted ? `${color}33` : `${color}14`}
                 stroke={color}
-                strokeWidth={(highlighted ? 3 : 1.2) * (nativeW / rendered.width)}
+                strokeWidth={1.4}
                 vectorEffect="non-scaling-stroke"
                 className="pointer-events-auto cursor-crosshair"
                 onMouseEnter={() => onHoverLine(i)}
