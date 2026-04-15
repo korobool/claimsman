@@ -336,6 +336,20 @@ export const api = {
       `/api/v1/claims/${claimId}/pages/${pageId}/bboxes`,
       { method: "POST", body: JSON.stringify(body) },
     ),
+  recognizeBBox: (
+    claimId: string,
+    pageId: string,
+    body: { bbox: number[]; polygon?: number[][] },
+  ) =>
+    requestJson<{
+      page_id: string;
+      line_index: number;
+      text: string;
+      confidence: number;
+    }>(
+      `/api/v1/claims/${claimId}/pages/${pageId}/bboxes/recognize`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
   llmStatus: () =>
     requestJson<{
       reachable: boolean;

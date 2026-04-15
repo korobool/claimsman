@@ -316,10 +316,10 @@ function PageViewer({
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
   const [dragEnd, setDragEnd] = useState<{ x: number; y: number } | null>(null);
-  const [pendingBBox, setPendingBBox] = useState<
+  const [recognizing, setRecognizing] = useState<
     { x0: number; y0: number; x1: number; y1: number } | null
   >(null);
-  const [pendingText, setPendingText] = useState("");
+  const [recognizeError, setRecognizeError] = useState<string | null>(null);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editingText, setEditingText] = useState("");
 
@@ -360,7 +360,7 @@ function PageViewer({
     if (tool !== "add_bbox" || !dragStart) return;
     setDragEnd(toSvgPoint(e));
   };
-  const onUp = () => {
+  const onUp = async () => {
     if (tool !== "add_bbox" || !dragStart || !dragEnd) {
       setDragStart(null);
       setDragEnd(null);
@@ -373,16 +373,16 @@ function PageViewer({
     setDragStart(null);
     setDragEnd(null);
     if (x1 - x0 < 6 || y1 - y0 < 6) return;
-    setPendingBBox({ x0, y0, x1, y1 });
-    setPendingText("");
-  };
 
-  const confirmBBox = async () => {
-    if (!pendingBBox) return;
-    const { x0, y0, x1, y1 } = pendingBBox;
+    // Auto-recognize with Surya on the user-drawn region. Drawing a
+    // manual box is an implicit signal that the auto-detector missed
+    // something; we hand Surya the exact rectangle so recognition is
+    // forced to the reviewer's selection. The reviewer can still use
+    // the "Edit text" tool afterwards to correct the result.
+    setRecognizing({ x0, y0, x1, y1 });
+    setRecognizeError(null);
     try {
-      await api.addBBox(claimId, page.id, {
-        text: pendingText,
+      await api.recognizeBBox(claimId, page.id, {
         bbox: [x0, y0, x1, y1],
         polygon: [
           [x0, y0],
@@ -390,18 +390,13 @@ function PageViewer({
           [x1, y1],
           [x0, y1],
         ],
-        confidence: 1.0,
       });
-      setPendingBBox(null);
-      setPendingText("");
       onBBoxAdded();
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      setRecognizeError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRecognizing(null);
     }
-  };
-  const cancelBBox = () => {
-    setPendingBBox(null);
-    setPendingText("");
   };
 
   const startEditLine = (i: number, currentText: string) => {
@@ -494,39 +489,41 @@ function PageViewer({
             vectorEffect="non-scaling-stroke"
           />
         )}
+        {recognizing && (
+          <rect
+            x={recognizing.x0}
+            y={recognizing.y0}
+            width={recognizing.x1 - recognizing.x0}
+            height={recognizing.y1 - recognizing.y0}
+            fill="#6aa9ff33"
+            stroke="#6aa9ff"
+            strokeWidth={2}
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
       </svg>
 
-      {pendingBBox && (
+      {recognizing && (
         <div className="absolute inset-x-0 bottom-2 flex justify-center">
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              confirmBBox();
-            }}
-            className="flex items-center gap-2 rounded-md border border-accent/60 bg-bg-raised/95 px-3 py-2 shadow-lg"
-          >
-            <span className="text-[10px] uppercase tracking-wide text-ink-faint">New bbox</span>
-            <input
-              autoFocus
-              value={pendingText}
-              onChange={(e) => setPendingText(e.target.value)}
-              placeholder="Type the text inside the box…"
-              className="w-72 rounded border border-line bg-bg-base px-2 py-1 text-xs outline-none focus:border-accent"
-            />
-            <button
-              type="submit"
-              className="rounded bg-accent px-3 py-1 text-[11px] font-medium text-[#0b0d10] hover:bg-accent-strong"
-            >
-              Add
-            </button>
+          <div className="flex items-center gap-2 rounded-md border border-accent/60 bg-bg-raised/95 px-3 py-2 shadow-lg">
+            <Spinner />
+            <span className="text-xs text-ink">Recognizing region with Surya…</span>
+          </div>
+        </div>
+      )}
+
+      {recognizeError && !recognizing && (
+        <div className="absolute inset-x-0 bottom-2 flex justify-center">
+          <div className="flex items-center gap-2 rounded-md border border-severity-error/60 bg-severity-error/10 px-3 py-2 text-xs text-severity-error shadow-lg">
+            <span>Region recognize failed: {recognizeError}</span>
             <button
               type="button"
-              onClick={cancelBBox}
-              className="rounded border border-line px-3 py-1 text-[11px] text-ink-dim hover:text-ink"
+              onClick={() => setRecognizeError(null)}
+              className="rounded border border-severity-error/40 px-2 py-0.5 text-[11px]"
             >
-              Cancel
+              Dismiss
             </button>
-          </form>
+          </div>
         </div>
       )}
 

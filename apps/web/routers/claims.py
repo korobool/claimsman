@@ -148,6 +148,11 @@ class BBoxAddIn(BaseModel):
     confidence: float = 1.0
 
 
+class BBoxRecognizeIn(BaseModel):
+    bbox: list[float]
+    polygon: list[list[float]] | None = None
+
+
 @router.post("/{claim_id}/decision/confirm")
 async def confirm_decision(
     claim_id: uuid.UUID,
@@ -338,6 +343,99 @@ async def edit_ocr_line(
     )
     await session.commit()
     return {"page_id": str(page.id), "line_index": payload.index, "text": payload.text}
+
+
+@router.post("/{claim_id}/pages/{page_id}/bboxes/recognize")
+async def recognize_region(
+    claim_id: uuid.UUID,
+    page_id: uuid.UUID,
+    payload: BBoxRecognizeIn,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict:
+    """Run Surya OCR on the user-drawn rectangle and persist a new
+    manual-but-auto-recognized line. Used by the 'Add BBox' tool: the
+    reviewer draws the rectangle, Surya recognizes the text, and the
+    result is added to the page's OCR lines. The reviewer can still
+    correct the text afterwards via the Edit-text tool."""
+    import asyncio as _asyncio
+    from pathlib import Path as _Path
+
+    from PIL import Image as _Image
+
+    from packages.ocr import get_ocr_engine
+
+    result = await session.execute(
+        select(Page).join(Document).where(Page.id == page_id).where(Document.claim_id == claim_id)
+    )
+    page = result.scalar_one_or_none()
+    if page is None or not page.image_path:
+        raise HTTPException(status_code=404, detail="page image not found")
+    if not _Path(page.image_path).exists():
+        raise HTTPException(status_code=410, detail="page image missing on disk")
+
+    def _run_region_ocr() -> tuple[str, float]:
+        engine = get_ocr_engine()
+        with _Image.open(page.image_path) as img:
+            ocr = engine.recognize_region(img, payload.bbox)
+        if ocr.lines:
+            lines_text = "\n".join(line.text for line in ocr.lines if line.text).strip()
+            return lines_text, float(ocr.mean_confidence)
+        return "", 0.0
+
+    try:
+        text, confidence = await _asyncio.to_thread(_run_region_ocr)
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "page.bbox_recognize.error",
+            claim_id=str(claim_id),
+            page_id=str(page_id),
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        raise HTTPException(status_code=500, detail=f"recognize failed: {exc}") from exc
+
+    bbox_json = page.bbox_json if isinstance(page.bbox_json, dict) else {"lines": []}
+    lines = list(bbox_json.get("lines") or [])
+    if payload.polygon is None:
+        x0, y0, x1, y1 = payload.bbox
+        polygon = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+    else:
+        polygon = payload.polygon
+    new_line = {
+        "text": text,
+        "bbox": payload.bbox,
+        "polygon": polygon,
+        "confidence": confidence or 1.0,
+        "manual": True,
+        "auto_recognized": True,
+    }
+    lines.append(new_line)
+    bbox_json["lines"] = lines
+    page.bbox_json = dict(bbox_json)
+    page.ocr_text = "\n".join(line.get("text", "") for line in lines)
+    session.add(
+        AuditLog(
+            actor="reviewer",
+            entity="page",
+            entity_id=page.id,
+            action="bbox_recognize",
+            after_json={"bbox": payload.bbox, "text": text, "confidence": confidence},
+        )
+    )
+    await session.commit()
+    logger.info(
+        "page.bbox_recognized",
+        claim_id=str(claim_id),
+        page_id=str(page_id),
+        chars=len(text),
+        confidence=round(confidence, 3),
+    )
+    return {
+        "page_id": str(page.id),
+        "line_index": len(lines) - 1,
+        "text": text,
+        "confidence": confidence,
+    }
 
 
 @router.post("/{claim_id}/pages/{page_id}/bboxes")

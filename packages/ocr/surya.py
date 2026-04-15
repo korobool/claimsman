@@ -110,6 +110,49 @@ class OcrEngine:
                 [image.convert("RGB")],
                 det_predictor=self._det_predictor,
             )
+        return self._build_result(image, predictions, languages)
+
+    def recognize_region(
+        self,
+        image: Image.Image,
+        bbox: list[float],
+        *,
+        languages: Optional[list[str]] = None,
+    ) -> OcrResult:
+        """Recognize text inside a single user-supplied rectangular region.
+
+        Skips Surya's text-line detection entirely: the caller has already
+        decided where the text is (by drawing an 'Add BBox' rectangle), so we
+        just hand that rectangle to the recognition predictor as the sole
+        region. This gives much better results on regions that the automatic
+        detector missed (handwriting, stamps, low-contrast text).
+        """
+        self._initialize()
+        assert self._rec_predictor is not None
+
+        x0, y0, x1, y1 = [float(v) for v in bbox]
+        # Clamp to the image bounds and to ints.
+        x0 = max(0, int(round(x0)))
+        y0 = max(0, int(round(y0)))
+        x1 = min(image.width, int(round(x1)))
+        y1 = min(image.height, int(round(y1)))
+        if x1 <= x0 or y1 <= y0:
+            return OcrResult(width=image.width, height=image.height, languages=languages or [])
+
+        rgb = image.convert("RGB")
+        with self._lock:
+            predictions = self._rec_predictor(
+                [rgb],
+                bboxes=[[[x0, y0, x1, y1]]],
+            )
+        return self._build_result(image, predictions, languages)
+
+    def _build_result(
+        self,
+        image: Image.Image,
+        predictions,
+        languages: Optional[list[str]],
+    ) -> OcrResult:
 
         if not predictions:
             return OcrResult(width=image.width, height=image.height, languages=languages or [])
@@ -122,7 +165,7 @@ class OcrEngine:
         )
         for line in getattr(pred, "text_lines", []) or []:
             text = getattr(line, "text", "") or ""
-            bbox = getattr(line, "bbox", None) or []
+            bbox_attr = getattr(line, "bbox", None) or []
             polygon = getattr(line, "polygon", None)
             confidence = getattr(line, "confidence", None)
             if confidence is None:
@@ -130,7 +173,7 @@ class OcrEngine:
             result.lines.append(
                 OcrLine(
                     text=str(text),
-                    bbox=[float(x) for x in bbox] if bbox else [],
+                    bbox=[float(x) for x in bbox_attr] if bbox_attr else [],
                     confidence=float(confidence),
                     polygon=[[float(x) for x in p] for p in polygon] if polygon else None,
                 )
