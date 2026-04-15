@@ -20,3 +20,5 @@ sentencepiece>=0.2
 protobuf>=4.25
 scipy>=1.13
 numpy>=1.26
+requests>=2.31
+httpx>=0.27

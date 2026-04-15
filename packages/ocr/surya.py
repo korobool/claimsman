@@ -61,6 +61,7 @@ class OcrEngine:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._initialized = False
+        self._foundation_predictor = None
         self._det_predictor = None
         self._rec_predictor = None
         self._device: str = "cpu"
@@ -75,6 +76,7 @@ class OcrEngine:
             import torch  # noqa: F401 — required by surya
 
             from surya.detection import DetectionPredictor  # type: ignore
+            from surya.foundation import FoundationPredictor  # type: ignore
             from surya.recognition import RecognitionPredictor  # type: ignore
 
             # Respect SURYA_DEVICE / CLAIMSMAN_SURYA_DEVICE if set; default
@@ -84,8 +86,12 @@ class OcrEngine:
             ) or "cpu"
 
             self._device = device
-            self._det_predictor = DetectionPredictor()
-            self._rec_predictor = RecognitionPredictor()
+            # Surya 0.17+ API: a single FoundationPredictor backs the
+            # RecognitionPredictor; DetectionPredictor is constructed
+            # separately and passed at call time.
+            self._foundation_predictor = FoundationPredictor(device=device)
+            self._rec_predictor = RecognitionPredictor(self._foundation_predictor)
+            self._det_predictor = DetectionPredictor(device=device)
             self._initialized = True
 
     def recognize(
