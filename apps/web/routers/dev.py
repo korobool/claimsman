@@ -28,14 +28,14 @@ router = APIRouter(prefix="/dev", tags=["dev"])
 
 
 CURRENT_MILESTONE = {
-    "id": "M5",
-    "label": "Decisioning engine + reviewer workflow",
-    "phase": "M5",
+    "id": "M7",
+    "label": "Polish + runbook + acceptance criteria",
+    "phase": "M7",
     "description": (
-        "Deterministic rule gates + Gemma 4 reasoning propose a decision "
-        "(approve / partial / deny / needs_info), amount, and markdown "
-        "rationale. Reviewer approve/edit/reject actions persist as "
-        "audited Decision rows and transition the claim state."
+        "Final milestone. Keyboard shortcuts, empty/error states, "
+        "accessibility audit, runbook, and a green end-to-end visual "
+        "test against the Bulgarian bundle. All earlier milestones are "
+        "live in the deployed app."
     ),
     "completed_milestones": [
         "M1 — skeleton",
@@ -43,10 +43,12 @@ CURRENT_MILESTONE = {
         "M2.4b — Surya OCR + SigLIP classification",
         "M3 — LLM extraction + schemas/domains + bbox overlay + Domains admin",
         "M4 — findings engine + health/motor rule modules",
+        "M5 — decisioning engine + reviewer workflow + LLM generators + add-uploads + re-run",
+        "M6 — Schemas + LLM + Health admin UIs",
     ],
     "next_milestones": [
-        "M6 — admin UIs (Schemas, LLM, Health)",
-        "M7 — accessibility + polish + runbook",
+        "v1 acceptance criteria check",
+        "authentication milestone (post-v1)",
     ],
 }
 
