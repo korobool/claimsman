@@ -1247,21 +1247,23 @@ function StepNavigator({
   pipeline?: ClaimDetail["pipeline"];
   onChange: (s: ClaimStep) => void;
 }) {
-  // A step is "done" when the pipeline has moved past it.
+  // Only the `current` step is "active". Steps earlier than the
+  // user's current selection are "done" (green check). Steps later
+  // than current are either "done" (if the pipeline has finished them)
+  // or "pending" (if the pipeline hasn't reached them yet).
   const stage = pipeline?.stage;
+  const pipelinePassed: Record<ClaimStep, boolean> = {
+    intake: true, // always done once we have a claim row
+    recognition: ["analyze", "decide", "ready", "decided", "escalated"].includes(stage ?? ""),
+    analysis: ["ready", "decided", "escalated"].includes(stage ?? ""),
+    review: ["decided", "escalated"].includes(stage ?? ""),
+  };
   const statusOf = (step: ClaimStep): "done" | "active" | "pending" => {
-    const map: Record<ClaimStep, string[]> = {
-      intake: ["ingest"],
-      recognition: ["ocr", "classify", "extract"],
-      analysis: ["analyze", "decide"],
-      review: ["ready", "decided", "escalated"],
-    };
     if (step === current) return "active";
-    // done if the pipeline has moved past this step
+    if (pipelinePassed[step]) return "done";
     const stepIdx = STEP_ORDER.indexOf(step);
     const currentIdx = STEP_ORDER.indexOf(current);
     if (stepIdx < currentIdx) return "done";
-    if (stage && map[step].includes(stage)) return "active";
     return "pending";
   };
   return (
