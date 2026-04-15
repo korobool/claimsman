@@ -75,6 +75,32 @@ export interface ClaimDocument {
   page_count: number;
   pages: ClaimPage[];
   extracted_fields: ExtractedField[];
+  doc_stage: "pending" | "ocr" | "classify" | "extract" | "ready";
+}
+
+export interface PipelineStatus {
+  stage:
+    | "ingest"
+    | "ocr"
+    | "classify"
+    | "extract"
+    | "analyze"
+    | "decide"
+    | "ready"
+    | "error"
+    | "decided"
+    | "escalated";
+  label: string;
+  active: boolean;
+  progress: number;
+  totals: {
+    pages: number;
+    pages_with_image: number;
+    pages_ocr: number;
+    pages_classified: number;
+    docs: number;
+    docs_extracted: number;
+  };
 }
 
 export interface Finding {
@@ -116,6 +142,7 @@ export interface ClaimDetail extends ClaimSummary {
   proposed_decision: ClaimDecision | null;
   confirmed_decision: ClaimDecision | null;
   decisions: ClaimDecision[];
+  pipeline: PipelineStatus;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

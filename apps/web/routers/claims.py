@@ -73,6 +73,7 @@ async def get_claim(
     )
     proposed = next((d for d in decisions if d.is_proposed), None)
     confirmed = next((d for d in decisions if not d.is_proposed), None)
+    stage_info = _compute_stage(claim, proposed)
     return {
         **claim.to_dict(),
         "uploads": [u.to_dict() for u in claim.uploads],
@@ -86,6 +87,7 @@ async def get_claim(
         "proposed_decision": proposed.to_dict() if proposed else None,
         "confirmed_decision": confirmed.to_dict() if confirmed else None,
         "decisions": [d.to_dict() for d in decisions],
+        "pipeline": stage_info,
         "documents": [
             {
                 "id": str(d.id),
@@ -114,6 +116,7 @@ async def get_claim(
                     for p in sorted(d.pages, key=lambda x: x.page_index)
                 ],
                 "extracted_fields": [ef.to_dict() for ef in d.extracted_fields],
+                "doc_stage": _compute_doc_stage(d),
             }
             for d in claim.documents
         ],
@@ -493,6 +496,121 @@ async def create_claim(
         **claim.to_dict(),
         "uploads": [u.to_dict() for u in claim.uploads],
     }
+
+
+STAGE_ORDER = [
+    "ingest",
+    "ocr",
+    "classify",
+    "extract",
+    "analyze",
+    "decide",
+]
+STAGE_WEIGHTS = {
+    "ingest": 0.05,
+    "ocr": 0.55,
+    "classify": 0.10,
+    "extract": 0.20,
+    "analyze": 0.05,
+    "decide": 0.05,
+}
+
+
+def _compute_stage(claim: Claim, proposed: Decision | None) -> dict:
+    """Derive a pipeline-stage snapshot from the current claim state.
+
+    Returned shape:
+        {
+          "stage": "ocr" | "classify" | ..., (or "ready" | "error" | "decided")
+          "label": "Running OCR",
+          "active": bool,        # true while pipeline is still working
+          "progress": 0.0..1.0,  # overall, derived from stage weights + within-stage progress
+          "totals": {pages, pages_ocr, pages_classified, docs, docs_extracted}
+        }
+    """
+    all_pages = [p for d in claim.documents for p in d.pages]
+    pages_total = len(all_pages)
+    pages_with_image = sum(1 for p in all_pages if p.image_path)
+    pages_ocr = sum(1 for p in all_pages if p.ocr_text or p.text_layer_used)
+    pages_classified = sum(1 for p in all_pages if p.classification)
+    docs_total = len(claim.documents)
+    docs_extracted = sum(1 for d in claim.documents if d.extracted_fields)
+
+    totals = {
+        "pages": pages_total,
+        "pages_with_image": pages_with_image,
+        "pages_ocr": pages_ocr,
+        "pages_classified": pages_classified,
+        "docs": docs_total,
+        "docs_extracted": docs_extracted,
+    }
+
+    status = claim.status.value if hasattr(claim.status, "value") else str(claim.status)
+
+    if status == "error":
+        return {"stage": "error", "label": "Error", "active": False, "progress": 0.0, "totals": totals}
+    if status in ("decided", "escalated"):
+        return {"stage": status, "label": status.replace("_", " ").title(), "active": False, "progress": 1.0, "totals": totals}
+    if status == "ready_for_review":
+        return {"stage": "ready", "label": "Ready for review", "active": False, "progress": 1.0, "totals": totals}
+
+    # Still processing → derive the active stage from the data
+    if docs_total == 0:
+        stage = "ingest"
+        within = 0.0
+    elif pages_with_image > 0 and pages_ocr < pages_with_image:
+        stage = "ocr"
+        within = pages_ocr / pages_with_image if pages_with_image else 0.0
+    elif pages_total > 0 and pages_classified < pages_total:
+        stage = "classify"
+        within = pages_classified / pages_total if pages_total else 0.0
+    elif docs_total > 0 and docs_extracted < docs_total:
+        stage = "extract"
+        within = docs_extracted / docs_total if docs_total else 0.0
+    elif not claim.findings:
+        stage = "analyze"
+        within = 0.5
+    elif proposed is None:
+        stage = "decide"
+        within = 0.5
+    else:
+        stage = "decide"
+        within = 1.0
+
+    # Overall progress: sum weights of completed stages + within-stage weight.
+    idx = STAGE_ORDER.index(stage)
+    progress = sum(STAGE_WEIGHTS[s] for s in STAGE_ORDER[:idx]) + STAGE_WEIGHTS[stage] * within
+
+    labels = {
+        "ingest": "Ingesting documents",
+        "ocr": f"OCR ({pages_ocr}/{pages_with_image} pages)" if pages_with_image else "Running OCR",
+        "classify": f"Classifying ({pages_classified}/{pages_total} pages)" if pages_total else "Classifying",
+        "extract": f"Extracting fields ({docs_extracted}/{docs_total} docs)" if docs_total else "Extracting fields",
+        "analyze": "Analyzing findings",
+        "decide": "Proposing decision",
+    }
+    return {
+        "stage": stage,
+        "label": labels[stage],
+        "active": True,
+        "progress": round(progress, 3),
+        "totals": totals,
+    }
+
+
+def _compute_doc_stage(doc: Document) -> str:
+    """Per-document stage: used to show a spinner next to each document
+    in the Claim Detail left rail while work is in flight on that doc."""
+    pages = list(doc.pages)
+    if not pages:
+        return "pending"
+    if any(p.image_path and not (p.ocr_text or p.text_layer_used) for p in pages):
+        return "ocr"
+    if any(not p.classification for p in pages):
+        return "classify"
+    if not doc.extracted_fields:
+        return "extract"
+    return "ready"
 
 
 async def _load_claim(session: AsyncSession, claim_id: uuid.UUID) -> Claim:

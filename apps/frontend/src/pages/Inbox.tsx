@@ -15,19 +15,24 @@ export default function Inbox() {
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([api.health(), api.info(), api.listClaims()])
-      .then(([h, i, c]) => {
-        if (cancelled) return;
-        setHealth(h);
-        setInfo(i);
-        setClaims(c.claims);
-      })
-      .catch((e: unknown) => {
-        if (cancelled) return;
-        setError(e instanceof Error ? e.message : String(e));
-      });
+    const load = () =>
+      Promise.all([api.health(), api.info(), api.listClaims()])
+        .then(([h, i, c]) => {
+          if (cancelled) return;
+          setHealth(h);
+          setInfo(i);
+          setClaims(c.claims);
+        })
+        .catch((e: unknown) => {
+          if (cancelled) return;
+          setError(e instanceof Error ? e.message : String(e));
+        });
+    load();
+    // Re-poll every 3 s so inbox badges update while pipelines run.
+    const interval = setInterval(load, 3000);
     return () => {
       cancelled = true;
+      clearInterval(interval);
     };
   }, []);
 
@@ -155,10 +160,18 @@ function StatusBadge({ status }: { status: string }) {
     decided: "bg-bg-hover text-ink-dim",
     error: "bg-severity-error/15 text-severity-error",
   };
+  const busy = status === "processing" || status === "uploaded";
   return (
     <span
-      className={`rounded-full px-2 py-0.5 text-xs font-medium ${palette[status] ?? "bg-bg-hover text-ink-dim"}`}
+      className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${palette[status] ?? "bg-bg-hover text-ink-dim"}`}
     >
+      {busy && (
+        <span
+          className="inline-block h-2 w-2 animate-spin rounded-full border border-severity-warn border-t-transparent"
+          role="status"
+          aria-label="in progress"
+        />
+      )}
       {status}
     </span>
   );

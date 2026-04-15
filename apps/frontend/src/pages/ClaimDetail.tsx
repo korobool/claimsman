@@ -40,8 +40,10 @@ export default function ClaimDetailPage() {
     load();
     const interval = setInterval(() => {
       const c = claimRef.current;
-      if (!c || c.status === "processing" || c.status === "uploaded") load();
-    }, 2500);
+      if (!c || c.pipeline?.active || c.status === "processing" || c.status === "uploaded") {
+        load();
+      }
+    }, 1500);
     return () => clearInterval(interval);
   }, [load]);
 
@@ -89,8 +91,8 @@ export default function ClaimDetailPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center justify-between border-b border-line px-6 py-4">
-        <div>
+      <header className="flex items-start justify-between border-b border-line px-6 py-4">
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-3">
             <Link
               to="/"
@@ -109,6 +111,7 @@ export default function ClaimDetailPage() {
               {claim.documents.length} documents · {totalPages} pages
             </span>
           </p>
+          {claim.pipeline?.active && <PipelineStageBar pipeline={claim.pipeline} />}
         </div>
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1 rounded-md border border-line p-0.5 text-[11px] font-medium">
@@ -178,12 +181,15 @@ export default function ClaimDetailPage() {
           )}
           {claim.documents.map((doc) => (
             <div key={doc.id} className="border-b border-line/60 px-3 py-3">
-              <div className="mb-2 flex items-center justify-between">
-                <div className="truncate text-sm font-medium" title={doc.display_name ?? ""}>
-                  {doc.display_name ?? "Untitled"}
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  {doc.doc_stage !== "ready" && <Spinner size="xs" />}
+                  <div className="truncate text-sm font-medium" title={doc.display_name ?? ""}>
+                    {doc.display_name ?? "Untitled"}
+                  </div>
                 </div>
-                <span className="rounded-full bg-bg-hover px-2 py-0.5 text-[10px] uppercase tracking-wide text-ink-faint">
-                  {doc.doc_type}
+                <span className="shrink-0 rounded-full bg-bg-hover px-2 py-0.5 text-[10px] uppercase tracking-wide text-ink-faint">
+                  {doc.doc_stage === "ready" ? doc.doc_type : doc.doc_stage}
                 </span>
               </div>
               <ul className="space-y-1">
@@ -1088,6 +1094,41 @@ function confidenceClass(confidence: number | null | undefined): string {
   if (confidence >= 0.93) return "bg-severity-ok/15 text-severity-ok";
   if (confidence >= 0.8) return "bg-severity-warn/15 text-severity-warn";
   return "bg-severity-error/15 text-severity-error";
+}
+
+function PipelineStageBar({
+  pipeline,
+}: {
+  pipeline: NonNullable<ClaimDetail["pipeline"]>;
+}) {
+  const pct = Math.max(3, Math.min(100, Math.round(pipeline.progress * 100)));
+  return (
+    <div className="mt-3 w-full max-w-xl">
+      <div className="mb-1 flex items-center gap-2 text-[11px] text-ink-dim">
+        <Spinner size="xs" />
+        <span className="uppercase tracking-wide text-ink-faint">Pipeline</span>
+        <span className="text-ink">{pipeline.label}</span>
+        <span className="ml-auto font-mono text-ink-faint">{pct}%</span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-bg-hover">
+        <div
+          className="h-full bg-accent transition-all duration-500 ease-out"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function Spinner({ size = "sm" }: { size?: "xs" | "sm" }) {
+  const px = size === "xs" ? "h-3 w-3 border-[1.5px]" : "h-4 w-4 border-2";
+  return (
+    <span
+      className={`inline-block animate-spin rounded-full border-accent/60 border-t-transparent ${px}`}
+      aria-label="in progress"
+      role="status"
+    />
+  );
 }
 
 function confidenceDot(confidence: number): string {
