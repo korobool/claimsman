@@ -352,11 +352,22 @@ async def recognize_region(
     payload: BBoxRecognizeIn,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> dict:
-    """Run Surya OCR on the user-drawn rectangle and persist a new
-    manual-but-auto-recognized line. Used by the 'Add BBox' tool: the
-    reviewer draws the rectangle, Surya recognizes the text, and the
-    result is added to the page's OCR lines. The reviewer can still
-    correct the text afterwards via the Edit-text tool."""
+    """Enforced bbox reinforce.
+
+    When the reviewer draws a bounding box on a page, Claimsman
+    **skips Surya's detection phase entirely** and re-runs Surya
+    recognition on a fixed bbox set made of:
+      - every existing (pre-user-drawn) OCR line that does NOT
+        overlap the new rectangle by >30% of its own area, and
+      - the user's new rectangle as one additional line.
+
+    This is the 'enforce boxes' behavior from the reference prototype
+    (claims_doc_recognizer). It guarantees that the reviewer's
+    selection is always used literally (Surya never second-guesses
+    it) and the rest of the page's detections are kept but re-read
+    in the same recognition pass so the text for every line is
+    consistent with the user's edit.
+    """
     import asyncio as _asyncio
     from pathlib import Path as _Path
 
@@ -373,17 +384,53 @@ async def recognize_region(
     if not _Path(page.image_path).exists():
         raise HTTPException(status_code=410, detail="page image missing on disk")
 
-    def _run_region_ocr() -> tuple[str, float]:
+    # Build the kept-existing set: drop lines overlapping the new bbox.
+    bbox_json = page.bbox_json if isinstance(page.bbox_json, dict) else {"lines": []}
+    existing_lines = list(bbox_json.get("lines") or [])
+    kept_existing: list[dict] = []
+    removed_count = 0
+    for line in existing_lines:
+        lb = line.get("bbox") or []
+        if len(lb) == 4 and _bbox_overlaps(lb, payload.bbox, 0.30):
+            removed_count += 1
+            continue
+        kept_existing.append(line)
+
+    # The full bbox set passed to Surya = kept + user's new one (last).
+    full_bbox_set: list[list[float]] = [
+        [float(x) for x in (line.get("bbox") or [])]
+        for line in kept_existing
+        if (line.get("bbox") or [])
+    ]
+    new_bbox = [float(v) for v in payload.bbox]
+    full_bbox_set.append(new_bbox)
+
+    def _run_enforced_ocr() -> list[dict]:
         engine = get_ocr_engine()
         with _Image.open(page.image_path) as img:
-            ocr = engine.recognize_region(img, payload.bbox)
-        if ocr.lines:
-            lines_text = "\n".join(line.text for line in ocr.lines if line.text).strip()
-            return lines_text, float(ocr.mean_confidence)
-        return "", 0.0
+            ocr = engine.recognize_bboxes(img, full_bbox_set)
+        # Surya returns lines in the same order as the input bboxes.
+        out: list[dict] = []
+        for i, recognized in enumerate(ocr.lines):
+            bb = full_bbox_set[i] if i < len(full_bbox_set) else recognized.bbox
+            is_new = i == len(full_bbox_set) - 1
+            x0, y0, x1, y1 = bb
+            polygon = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+            out.append(
+                {
+                    "text": recognized.text,
+                    "bbox": [float(c) for c in bb],
+                    "polygon": polygon,
+                    "confidence": float(recognized.confidence) if recognized.confidence else 1.0,
+                    "manual": is_new,
+                    "auto_recognized": True,
+                    "reinforce_id": None if not is_new else "user",
+                }
+            )
+        return out
 
     try:
-        text, confidence = await _asyncio.to_thread(_run_region_ocr)
+        new_lines = await _asyncio.to_thread(_run_enforced_ocr)
     except Exception as exc:  # noqa: BLE001
         logger.error(
             "page.bbox_recognize.error",
@@ -394,67 +441,48 @@ async def recognize_region(
         )
         raise HTTPException(status_code=500, detail=f"recognize failed: {exc}") from exc
 
-    bbox_json = page.bbox_json if isinstance(page.bbox_json, dict) else {"lines": []}
-    existing_lines = list(bbox_json.get("lines") or [])
-
-    # Override behavior (ported from the reference prototype
-    # app/static/js/app.js processNewBbox + bboxOverlaps): any existing
-    # OCR line whose bbox overlaps the new user-drawn rectangle by more
-    # than 30% of the existing bbox's area is removed. The reviewer is
-    # saying "trust my rectangle, not Surya's detection" — so we wipe
-    # Surya's overlapping lines and append the freshly-recognized one.
-    kept_lines: list[dict] = []
-    removed_count = 0
-    for line in existing_lines:
-        lb = line.get("bbox") or []
-        if len(lb) == 4 and _bbox_overlaps(lb, payload.bbox, 0.30):
-            removed_count += 1
-            continue
-        kept_lines.append(line)
-
-    if payload.polygon is None:
-        x0, y0, x1, y1 = payload.bbox
-        polygon = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
-    else:
-        polygon = payload.polygon
-    new_line = {
-        "text": text,
-        "bbox": payload.bbox,
-        "polygon": polygon,
-        "confidence": confidence or 1.0,
-        "manual": True,
-        "auto_recognized": True,
+    new_lines.sort(key=_line_sort_key)
+    bbox_json = {
+        **bbox_json,
+        "lines": new_lines,
+        "reinforced": True,
     }
-    kept_lines.append(new_line)
-    kept_lines.sort(key=_line_sort_key)
-    lines = kept_lines
-    bbox_json["lines"] = lines
     page.bbox_json = dict(bbox_json)
-    page.ocr_text = "\n".join(line.get("text", "") for line in lines)
+    page.ocr_text = "\n".join(line.get("text", "") for line in new_lines)
+
+    # Audit the event with the user's rectangle for traceability.
+    user_line = next((l for l in new_lines if l.get("manual")), None)
     session.add(
         AuditLog(
             actor="reviewer",
             entity="page",
             entity_id=page.id,
-            action="bbox_recognize",
-            after_json={"bbox": payload.bbox, "text": text, "confidence": confidence},
+            action="bbox_reinforce",
+            after_json={
+                "user_bbox": new_bbox,
+                "user_text": (user_line or {}).get("text"),
+                "user_confidence": (user_line or {}).get("confidence"),
+                "overridden": removed_count,
+                "total_lines": len(new_lines),
+            },
         )
     )
     await session.commit()
     logger.info(
-        "page.bbox_recognized",
+        "page.bbox_reinforced",
         claim_id=str(claim_id),
         page_id=str(page_id),
-        chars=len(text),
-        confidence=round(confidence, 3),
+        user_text_chars=len((user_line or {}).get("text") or ""),
+        user_confidence=round((user_line or {}).get("confidence") or 0.0, 3),
         overridden=removed_count,
+        total_lines=len(new_lines),
     )
     return {
         "page_id": str(page.id),
-        "line_count": len(lines),
+        "line_count": len(new_lines),
         "overridden": removed_count,
-        "text": text,
-        "confidence": confidence,
+        "user_text": (user_line or {}).get("text") or "",
+        "user_confidence": (user_line or {}).get("confidence") or 0.0,
     }
 
 

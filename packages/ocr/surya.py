@@ -119,31 +119,51 @@ class OcrEngine:
         *,
         languages: Optional[list[str]] = None,
     ) -> OcrResult:
-        """Recognize text inside a single user-supplied rectangular region.
+        """Recognize one bbox (thin wrapper around recognize_bboxes)."""
+        return self.recognize_bboxes(image, [bbox], languages=languages)
 
-        Skips Surya's text-line detection entirely: the caller has already
-        decided where the text is (by drawing an 'Add BBox' rectangle), so we
-        just hand that rectangle to the recognition predictor as the sole
-        region. This gives much better results on regions that the automatic
-        detector missed (handwriting, stamps, low-contrast text).
+    def recognize_bboxes(
+        self,
+        image: Image.Image,
+        bboxes: list[list[float]],
+        *,
+        languages: Optional[list[str]] = None,
+    ) -> OcrResult:
+        """Enforced recognition on a fixed bbox set.
+
+        Surya's detection phase is skipped entirely — the caller has
+        already decided where the text lines are (typically: existing
+        non-overlapping OCR lines + a new user-drawn rectangle). Surya
+        runs recognition on every bbox in the list in the given order,
+        and returns one OcrLine per bbox in the same order.
+
+        This matches the reference prototype's ``enforce_boxes=True``
+        semantics: the reviewer's selection is never second-guessed.
         """
         self._initialize()
         assert self._rec_predictor is not None
 
-        x0, y0, x1, y1 = [float(v) for v in bbox]
-        # Clamp to the image bounds and to ints.
-        x0 = max(0, int(round(x0)))
-        y0 = max(0, int(round(y0)))
-        x1 = min(image.width, int(round(x1)))
-        y1 = min(image.height, int(round(y1)))
-        if x1 <= x0 or y1 <= y0:
-            return OcrResult(width=image.width, height=image.height, languages=languages or [])
+        cleaned: list[list[int]] = []
+        for b in bboxes:
+            if not b or len(b) < 4:
+                continue
+            x0 = max(0, int(round(float(b[0]))))
+            y0 = max(0, int(round(float(b[1]))))
+            x1 = min(image.width, int(round(float(b[2]))))
+            y1 = min(image.height, int(round(float(b[3]))))
+            if x1 <= x0 or y1 <= y0:
+                continue
+            cleaned.append([x0, y0, x1, y1])
+        if not cleaned:
+            return OcrResult(
+                width=image.width, height=image.height, languages=languages or []
+            )
 
         rgb = image.convert("RGB")
         with self._lock:
             predictions = self._rec_predictor(
                 [rgb],
-                bboxes=[[[x0, y0, x1, y1]]],
+                bboxes=[cleaned],
             )
         return self._build_result(image, predictions, languages)
 
