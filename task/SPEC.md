@@ -256,7 +256,7 @@ The JSON shape is **versioned** (`"export_version": "1.0"`) so future format cha
     │                                   │
     │  /api/v1/*   → JSON API           │
     │  /ws/*       → WebSocket          │
-    │  /app        → built React SPA    │
+    │  /app        → built SPA (static) │
     │                (static bundle)    │
     │  /app/assets → hashed JS/CSS      │
     │  /healthz    → liveness           │
@@ -284,15 +284,15 @@ The JSON shape is **versioned** (`"export_version": "1.0"`) so future format cha
 
 - Exposes the JSON API under `/api/v1/*`.
 - Exposes WebSocket events under `/ws/*`.
-- Serves the **built** React SPA's static files under `/app` (HTML, hashed JS/CSS, assets). The root path `/` redirects to `/app`.
+- Serves the **built** SPA's static files under `/app` (HTML, hashed JS/CSS, assets). The root path `/` redirects to `/app`.
 - Runs the ingestion and analysis pipeline **in-process**, using `asyncio` for I/O and a bounded `ThreadPoolExecutor` (or `ProcessPoolExecutor` where required by Surya/PyTorch) for CPU/GPU-bound stages.
 - Writes to PostgreSQL (the only out-of-process dependency Claimsman manages).
 
 **Rationale:** simplifies deploy, logs, and debugging on a single dev server; eliminates a queue/broker and an independent worker lifecycle; makes `tmux` monitoring trivial (one session, one process, one log stream). Scale-out is a v2 concern.
 
 **Consequences the agent must respect:**
-- The React app is **built** (Vite → static files) at deploy time and copied to `apps/web/static/app/`. FastAPI mounts that directory at `/app` with `StaticFiles(..., html=True)` so SPA routes resolve to `index.html`.
-- In development, the agent **still builds** the frontend (Vite build, watch mode is fine) into the same static directory. **Do not** run `vite dev` on a separate port in production — there is one process and one port.
+- The SPA is **built to static files** at deploy time and written into `apps/web/static/app/`. FastAPI mounts that directory at `/app` with `StaticFiles(..., html=True)` so SPA routes resolve to `index.html`. The choice of build tool (Vite, esbuild, Rollup, Webpack, Turbopack, etc.) is the agent's; the only requirement is that the output is a plain static bundle with a hashed asset directory.
+- In development, the agent **still builds** the frontend into the same static directory (watch mode is fine). **Do not** run a standalone frontend dev server on a different port in production — there is one process and one port.
 - Long-running pipeline stages must not block the event loop: wrap CPU-heavy work in `run_in_executor` and yield back so API requests and WebSocket events continue flowing.
 - Surya OCR and SigLIP 2 models load **lazily on first use** and stay in memory for the process lifetime (same pattern as the prototype).
 - **Ollama is already running on the host** (Gemma 4 pulled). Claimsman's single process connects to `http://localhost:11434` over HTTP. Do not provision or containerize Ollama.
@@ -329,8 +329,11 @@ Stages emit **WebSocket events** on `/ws/claims/{id}` so the UI live-updates the
 | LLM           | **Ollama with Gemma 4** (host-installed)| Required; vision-capable; already running on the dev server.     |
 | DB            | PostgreSQL 16                          | Relational, mature, JSONB for semi-structured claim data.        |
 | Pipeline runner | In-process asyncio + executor        | Single-process mandate — no Celery/RQ/Redis broker.              |
-| Frontend      | React 18 + TypeScript + Vite (build only) | Built to static files and served by FastAPI at `/app`.         |
-| UI toolkit    | Tailwind CSS + shadcn/ui               | Rapid, beautiful, accessible components.                         |
+| Frontend framework | **Agent's choice** — a modern, typed, component-based SPA framework (React, Preact, Vue, Svelte, SolidJS, etc.). Default: React 18 + TypeScript because the current scaffold uses it, but the agent is free to pick a different stack if it justifies the decision in an ADR. | Built to static files and served by FastAPI at `/app`. |
+| Frontend language  | TypeScript (strongly preferred) or equivalent strictly-typed variant of the chosen framework. | Type safety on the reviewer path is non-negotiable; pick a framework that supports it well. |
+| Frontend build     | **Agent's choice** — Vite (current), esbuild, Rollup, Webpack, Turbopack, etc. | Only requirement: the output is a plain static bundle under `apps/web/static/app/`. |
+| UI styling         | **Agent's choice** — Tailwind (current), vanilla CSS modules, CSS-in-JS, UnoCSS, etc. | Must support dark mode as first-class. |
+| UI components      | **Agent's choice** — shadcn/ui, Radix primitives, Headless UI, Park UI, or hand-rolled. | Must meet the accessibility requirements in §5 and §11. |
 | State         | TanStack Query + Zustand               | Server cache + minimal client state.                             |
 | Charts        | Recharts                               | Simple declarative charts.                                       |
 | Logging       | structlog                              | Structured JSON logs out of the box.                             |
@@ -343,7 +346,7 @@ Stages emit **WebSocket events** on `/ws/claims/{id}` so the UI live-updates the
 - No mock database in integration tests (see §14).
 - No vanilla JS for the UI.
 - No OpenAI or Gemini calls in v1 — all LLM traffic goes to the local Ollama.
-- **No separate frontend server process** in any environment. Vite builds to static files; FastAPI serves them. `vite dev` on a standalone port is forbidden on the deployed server.
+- **No separate frontend server process** in any environment. The frontend is built to static files; FastAPI serves them. Running a standalone frontend dev server (`vite dev`, `next dev`, `webpack-dev-server`, etc.) on an extra port is forbidden on the deployed server.
 - **No Celery, no RQ, no Redis, no standalone worker process.** The pipeline runs inside the same Python process as the API.
 - **No OCR engine other than Surya.** Tesseract, EasyOCR, PaddleOCR, Apple Vision, AWS Textract, Google Document AI, and Azure Read are forbidden. If a document fails Surya, fix the preprocessing (contrast, deskew, DPI) and retry — do not reach for a different OCR.
 
@@ -580,9 +583,9 @@ claimsman/
 │   │   │   └── stages/
 │   │   ├── prompts/                  # Jinja templates for LLM
 │   │   ├── static/
-│   │   │   └── app/                  # BUILT React SPA (Vite output) — mounted at /app
+│   │   │   └── app/                  # BUILT SPA bundle — mounted at /app
 │   │   └── tests/
-│   └── frontend/                     # React + Vite source (build-only; no dev server in prod)
+│   └── frontend/                     # SPA source (framework of the agent's choice; build-only)
 │       ├── src/
 │       ├── public/
 │       ├── vite.config.ts            # outDir → ../web/static/app
@@ -692,7 +695,7 @@ This is not a "build once and hand over" project. It's a **continuous agentic lo
 
 ### 14.5 Unit & Integration Tests
 - **Backend**: pytest for services, with fakes for Ollama and Surya but **real Postgres** (Dockerized test DB).
-- **Frontend**: component tests with Vitest + Testing Library.
+- **Frontend**: component/unit tests with whatever runner fits the chosen framework (Vitest, Jest, uvu, etc.) plus a DOM testing library appropriate for that framework.
 - **Contract**: generated OpenAPI schema validated against the backend in CI.
 
 ---
@@ -715,7 +718,7 @@ This is not a "build once and hand over" project. It's a **continuous agentic lo
 
 | Phase | Outcome                                                                                          |
 |-------|--------------------------------------------------------------------------------------------------|
-| M1    | Skeleton: repo, docker-compose DB/Redis, FastAPI + React scaffolds, login, single-file upload, health check, CI green. Deployed and reachable on the dev server. |
+| M1    | Skeleton: repo, docker-compose Postgres, FastAPI backend + SPA scaffold (framework of the agent's choice), login, single-file upload, health check, CI green. Deployed and reachable on the dev server. |
 | M2    | Ingest → OCR (Surya) → Classify (SigLIP) → Page viewer with bounding boxes. Lifted from prototype, wrapped in Claimsman services, visible in the UI. |
 | M3    | Seed script installs all default schemas (§4.8.1) and both domain packs (§4.8.2) on first run. LLM extraction (Gemma 4) with YAML schemas + domains. Editable extracted fields. Claim assembly from multiple documents. |
 | M4    | Findings engine + domain rule modules (health, motor) with the seeded check sets from §4.8.2. Findings shown in UI with source highlights. |
@@ -747,7 +750,7 @@ These are explicitly left for you to decide and document in `docs/decisions/`:
 
 - In-process task runner design: a single `asyncio` orchestrator vs. a small in-process job table polled by a background task group. (Pick one, respect §6.2.)
 - Session cookies vs. JWT for auth.
-- Which React component library variant (shadcn/ui vs. Radix primitives from scratch).
+- Frontend framework and component-library flavor — React (shadcn/ui vs. Radix primitives) vs. Vue vs. Svelte vs. SolidJS, etc. Any modern typed SPA framework is acceptable; document the choice in an ADR.
 - Storage structure for the visual test archive (flat by timestamp vs. nested by claim ID).
 - Whether to ship a seeded demo dataset inside the repo or fetch it on first run.
 
