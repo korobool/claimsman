@@ -123,8 +123,11 @@ export default function NewClaim() {
             className="hidden"
             accept="image/*,application/pdf,.docx"
             onChange={(e) => {
-              if (e.target.files) addFiles(e.target.files);
-              e.target.value = "";
+              if (e.target.files) {
+                const picked = Array.from(e.target.files);
+                e.target.value = "";
+                addFiles(picked);
+              }
             }}
           />
         </label>
